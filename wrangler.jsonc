@@ -15,7 +15,11 @@
     // Non-secret config. Same defaults as the Render deployment's .env.example.
     "CHAKUDYA_API_BASE_URL": "https://chakudya-api.edisontaimu9.workers.dev",
     "MCP_RATE_LIMIT_PER_MIN": "60",
-    "MCP_ALLOWED_ORIGINS": ""
+    // Claude.ai's custom connector setup calls the OAuth endpoints
+    // (/register, /token) directly from the browser, so those origins need
+    // to be explicitly allowed here or the browser blocks the response
+    // before the OAuth flow can complete.
+    "MCP_ALLOWED_ORIGINS": "https://claude.ai,https://claude.com"
   }
   // Secrets (MCP_AUTH_TOKEN, and optionally CHAKUDYA_ADMIN_API_KEY) are NOT
   // set here — see README.md. Set them with:
