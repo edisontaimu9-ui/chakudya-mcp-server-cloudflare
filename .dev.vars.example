@@ -1,0 +1,14 @@
+# Local dev secrets for `wrangler dev` (copy to .dev.vars, which is
+# gitignored — never commit real secrets).
+#
+# Non-secret config (CHAKUDYA_API_BASE_URL, MCP_ALLOWED_ORIGINS,
+# MCP_RATE_LIMIT_PER_MIN) lives in wrangler.jsonc's "vars" instead, since
+# it's fine to have in version control.
+
+MCP_AUTH_TOKEN=dev-only-token-change-me
+# ENVIRONMENT=development enables verbose (debug-level) logging and skips
+# the "MCP_AUTH_TOKEN required" check — leave unset for prod-like local testing.
+ENVIRONMENT=development
+
+# Only needed if you want to test an admin-gated CNR route locally.
+# CHAKUDYA_ADMIN_API_KEY=

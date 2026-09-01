@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // This is a SEPARATE Worker from chakudya-api (your CNR backend). This
+  // worker is the MCP server; it calls chakudya-api over HTTPS exactly like
+  // the Render deployment does. Pick whatever subdomain/name you want here —
+  // it does not need to relate to chakudya-api's name.
+  "name": "chakudya-mcp-server",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    // Non-secret config. Same defaults as the Render deployment's .env.example.
+    "CHAKUDYA_API_BASE_URL": "https://chakudya-api.edisontaimu9.workers.dev",
+    "MCP_RATE_LIMIT_PER_MIN": "60",
+    "MCP_ALLOWED_ORIGINS": ""
+  }
+  // Secrets (MCP_AUTH_TOKEN, and optionally CHAKUDYA_ADMIN_API_KEY) are NOT
+  // set here — see README.md. Set them with:
+  //   npx wrangler secret put MCP_AUTH_TOKEN
+}
