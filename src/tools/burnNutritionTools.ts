@@ -220,9 +220,12 @@ export function registerBurnNutritionTools(server: McpServer): void {
           114 * body_temp_c! -
           4.5 * days_post_burn!;
 
-        // Reference-only rough estimate the deck warns tends to underfeed —
-        // shown for comparison, not as the primary recommendation.
+        // Reference-only comparisons — the source paper explicitly warns
+        // both directions are inaccurate for burn patients, shown here only
+        // so the Toronto result can be sanity-checked against them, never
+        // as an alternative recommendation.
         const rapidFormulaRangeKcal = { low: 25 * weight_kg, high: 30 * weight_kg };
+        const curreriKcal = 25 * weight_kg + 40 * tbsa_burned_percent!;
 
         return ok(
           {
@@ -233,11 +236,21 @@ export function registerBurnNutritionTools(server: McpServer): void {
               "REE = -4343 + (10.5 x %TBSA burned) + (0.23 x kcal intake past 24h) + (0.84 x Harris-Benedict) + (114 x T degC) - (4.5 x days post-burn)",
             reference_only_rapid_formula_kcal_range: {
               ...rapidFormulaRangeKcal,
-              note: "25-30 kcal/kg/day — per the source, this rapid formula tends to UNDERFEED burn patients. Shown for comparison only.",
+              note: "25-30 kcal/kg/day (fixed weight-based ICU formula) — per Rousseau et al 2013, this UNDERFEEDS burn patients (Rimdeika et al, 2006). Shown for comparison only.",
             },
-            note: "Per source: no predictive equation is fully accurate; indirect calorimetry (fed state, repeated through hospitalization) is the gold standard where available.",
+            reference_only_curreri_kcal: {
+              value: Math.round(curreriKcal),
+              formula: "25 x weight_kg + 40 x %TBSA burned (Curreri, historical)",
+              note:
+                "Historical formula from the 1970s-80s 'hyperalimentation' era. Rousseau et al 2013 " +
+                "explicitly identifies this as a cause of routine massive OVERFEEDING in burn patients " +
+                "(deliveries around 5000 kcal/day were treated as normal under this equation), which " +
+                "caused morbidity including fatty liver infiltration and increased infectious morbidity. " +
+                "Shown for historical comparison only — not a recommended target.",
+            },
+            note: "Per source: no predictive equation is fully accurate; indirect calorimetry (fed state, repeated through hospitalization, results rounded up without exceeding +10% of measured value) is the gold standard where available.",
           },
-          { disclaimer: BURN_DISCLAIMER, citation: "Toronto equation; Harris-Benedict basal (no stress/activity factor)" }
+          { disclaimer: BURN_DISCLAIMER, citation: "Toronto equation; Harris-Benedict basal (no stress/activity factor); Curreri, historical — all per Rousseau et al, Clin Nutr 2013;32:497-502" }
         );
       }
     )
@@ -250,26 +263,34 @@ export function registerBurnNutritionTools(server: McpServer): void {
       title: "Burn Protein Requirements",
       description:
         "Estimate protein needs (g/kg/day) and the target non-protein-calorie:nitrogen (NPC:N) ratio " +
-        "by burn size, per ESPEN endorsed recommendations. Burn patients need substantially higher " +
-        "protein than other critically ill patients: ESPEN/ASPEN adults 1.5-2 g/kg/day, children " +
-        "3 g/kg/day.",
+        "by burn size, per ESPEN endorsed recommendations (Rousseau et al 2013, Table 1). Burn patients " +
+        "need substantially higher protein than other critically ill patients: adults 1.5-2 g/kg/day, " +
+        "children 1.5-3 g/kg/day. Note: adult intakes above 2.2 g/kg/day show no further benefit on net " +
+        "protein synthesis (Wolfe et al, Adv Shock Res 1983), and pediatric intakes up to 3 g/kg/day " +
+        "showed no added advantage over lower doses (O'Neil et al, J Burn Care Rehabil 1989).",
       inputSchema: {
         tbsa_burned_percent: z.number().min(0).max(100),
         weight_kg: z.number().positive().optional().describe("If given, also returns total grams/day"),
-        is_pediatric: z.boolean().optional().describe("If true, uses the flat 3 g/kg/day pediatric recommendation"),
+        is_pediatric: z.boolean().optional().describe("If true, uses the pediatric 1.5-3 g/kg/day range"),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     safeTool("burn_protein_requirements", async ({ tbsa_burned_percent, weight_kg, is_pediatric }) => {
       if (is_pediatric) {
-        const gPerKg = 3;
+        const range = { low: 1.5, high: 3.0 };
         return ok(
           {
-            protein_g_per_kg_per_day: gPerKg,
-            total_grams_per_day: weight_kg ? Math.round(gPerKg * weight_kg) : undefined,
-            note: "Flat pediatric recommendation per ESPEN endorsed recommendations, higher than other critically ill patient categories.",
+            protein_g_per_kg_per_day_range: range,
+            total_grams_per_day_range: weight_kg
+              ? { low: Math.round(range.low * weight_kg), high: Math.round(range.high * weight_kg) }
+              : undefined,
+            note:
+              "Per ESPEN endorsed recommendations (Table 1), higher than other critically ill patient " +
+              "categories. Intakes up to 3 g/kg/day have been reported without demonstrated added " +
+              "advantage over the lower end of this range (O'Neil et al, 1989) — the top of the range " +
+              "isn't automatically the target.",
           },
-          { disclaimer: BURN_DISCLAIMER, citation: "Rousseau et al, Clin Nutr 2013;32:497-502 (ESPEN endorsed recommendations)" }
+          { disclaimer: BURN_DISCLAIMER, citation: "Rousseau et al, Clin Nutr 2013;32:497-502 (ESPEN endorsed recommendations), Table 1" }
         );
       }
 
@@ -434,5 +455,63 @@ export function registerBurnNutritionTools(server: McpServer): void {
         );
       }
     )
+  );
+
+  // ── Carbohydrate delivery and glycemic targets ───────────────────────────
+  server.registerTool(
+    "burn_glucose_glycemic_targets",
+    {
+      title: "Burn Carbohydrate Delivery & Glycemic Targets",
+      description:
+        "Carbohydrate delivery limit and blood glucose targets for burn patients, per ESPEN endorsed " +
+        "recommendations (strong recommendation, Rousseau et al 2013, Table 1): limit carbohydrate " +
+        "delivery to 55-60% of total energy intake and not exceeding 5 mg/kg/min in both adults and " +
+        "children (~7 g/kg/day in a standard adult), and keep blood glucose between 5-8 mmol/l via " +
+        "continuous IV insulin infusion.",
+      inputSchema: {
+        weight_kg: z.number().positive().optional().describe("If given, computes the max carbohydrate g/day ceiling"),
+        total_energy_kcal_per_day: z
+          .number()
+          .positive()
+          .optional()
+          .describe("If given, computes the carbohydrate kcal/day range at 55-60% of total energy"),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    safeTool("burn_glucose_glycemic_targets", async ({ weight_kg, total_energy_kcal_per_day }) => {
+      const maxCarbGPerDay = weight_kg !== undefined ? 5 * weight_kg * 1.44 : undefined; // 5 mg/kg/min x 1440 min/day / 1000
+
+      let carbKcalRange: { low: number; high: number } | undefined;
+      if (total_energy_kcal_per_day !== undefined) {
+        carbKcalRange = {
+          low: Math.round(total_energy_kcal_per_day * 0.55),
+          high: Math.round(total_energy_kcal_per_day * 0.6),
+        };
+      }
+
+      return ok(
+        {
+          carbohydrate_delivery: {
+            percent_of_total_energy: { low: 55, high: 60 },
+            max_rate_mg_per_kg_per_min: 5,
+            max_g_per_day: maxCarbGPerDay !== undefined ? Math.round(maxCarbGPerDay) : undefined,
+            standard_adult_reference_g_per_day: 7,
+            kcal_per_day_range: carbKcalRange,
+            note: "Prescribed carbohydrate for both nutritional and drug-dilution purposes counts toward this ceiling — include non-nutritional dextrose sources (e.g. IV dextrose 5% used to treat hypernatremia) in the total.",
+          },
+          blood_glucose_target: {
+            mmol_per_l: { low: 5, high: 8 },
+            mg_per_dl_equivalent: { low: 90, high: 144 },
+            method: "Continuous intravenous insulin infusion",
+            note:
+              "Moderate glycemic control, not intensive insulin therapy — intensive control carries " +
+              "elevated hypoglycemia risk in burn patients due to frequent feeding interruptions for " +
+              "procedures under anesthesia. If moderate control isn't achievable, the general ICU " +
+              "fallback range of 6-8 mmol/l (100-150 mg/dl) applies.",
+          },
+        },
+        { disclaimer: BURN_DISCLAIMER, citation: "Rousseau et al, Clin Nutr 2013;32:497-502 (ESPEN endorsed recommendations), Table 1 — strong recommendation" }
+      );
+    })
   );
 }
