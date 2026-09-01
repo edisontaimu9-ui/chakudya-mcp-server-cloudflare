@@ -4,7 +4,7 @@
   // worker is the MCP server; it calls chakudya-api over HTTPS exactly like
   // the Render deployment does. Pick whatever subdomain/name you want here —
   // it does not need to relate to chakudya-api's name.
-  "name": "chakudya-mcp-server",
+  "name": "chakudya-mcp-server-cloudflare",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
