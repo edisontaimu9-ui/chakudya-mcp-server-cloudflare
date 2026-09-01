@@ -13,6 +13,7 @@ import { registerSgaAssessmentTools } from "../tools/sgaAssessmentTools.js";
 import { registerBurnNutritionTools } from "../tools/burnNutritionTools.js";
 import { registerPediatricBurnTools } from "../tools/pediatricBurnTools.js";
 import { registerClinicalNutritionAssessmentTools } from "../tools/clinicalNutritionAssessmentTools.js";
+import { registerAdjustedBodyWeightTools } from "../tools/adjustedBodyWeightTools.js";
 
 /**
  * Builds a new McpServer instance with every Chakudya tool registered.
@@ -42,6 +43,7 @@ export function createChakudyaMcpServer(): McpServer {
   registerBurnNutritionTools(server);
   registerPediatricBurnTools(server);
   registerClinicalNutritionAssessmentTools(server);
+  registerAdjustedBodyWeightTools(server);
 
   return server;
 }
