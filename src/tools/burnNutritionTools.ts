@@ -121,7 +121,7 @@ export function registerBurnNutritionTools(server: McpServer): void {
       description:
         "Estimate resting energy expenditure (REE) for a burn patient. Adults (>=18y): Toronto equation " +
         "(requires a Harris-Benedict basal value, computed internally with no stress/activity factors, " +
-        "per the source). Children 3-18y: Schofield weight+height equation, age- and sex-specific. " +
+        "per the source). Children (all pediatric ages): weight-only Schofield equation (Mrazek et al " +
         "Indirect calorimetry remains the gold standard when available; this is a fallback estimate.",
       inputSchema: {
         weight_kg: z.number().positive(),
@@ -149,34 +149,41 @@ export function registerBurnNutritionTools(server: McpServer): void {
         const isPediatric = age_years < 18;
 
         if (isPediatric) {
-          if (age_years < 3) {
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text:
-                    "The deck's Schofield table only covers ages 3-18y. For age <3y, use indirect " +
-                    "calorimetry or a validated infant/toddler predictive equation not covered by this tool.",
-                },
-              ],
-              isError: true as const,
-            };
-          }
-          const band = age_years < 10 ? "3-10" : "10-18";
+          // Weight-only Schofield (Mrazek et al 2024) — supersedes the older
+          // weight+height variant (Rousseau et al 2013) as the more recent
+          // published source, and additionally covers ages <3y, which the
+          // weight+height version's source table didn't include at all.
           let kcalPerDay: number;
+          let band: string;
           let formula: string;
-          if (band === "3-10" && sex === "female") {
-            kcalPerDay = 16.97 * weight_kg + 1.618 * height_cm + 371.2;
-            formula = "Schofield (girls 3-10y): (16.97 x weight_kg) + (1.618 x height_cm) + 371.2";
-          } else if (band === "3-10" && sex === "male") {
-            kcalPerDay = 19.6 * weight_kg + 1.033 * height_cm + 414.9;
-            formula = "Schofield (boys 3-10y): (19.6 x weight_kg) + (1.033 x height_cm) + 414.9";
-          } else if (band === "10-18" && sex === "female") {
-            kcalPerDay = 8.365 * weight_kg + 4.65 * height_cm + 200;
-            formula = "Schofield (girls 10-18y): (8.365 x weight_kg) + (4.65 x height_cm) + 200";
+          if (sex === "female") {
+            if (age_years < 3) {
+              band = "female <3y";
+              kcalPerDay = 58.31 * weight_kg - 31.1;
+              formula = "Schofield (weight-only, female <3y): (58.31 x weight_kg) - 31.1";
+            } else if (age_years <= 10) {
+              band = "female 3-10y";
+              kcalPerDay = 20.315 * weight_kg + 485.9;
+              formula = "Schofield (weight-only, female 3-10y): (20.315 x weight_kg) + 485.9";
+            } else {
+              band = "female 10-19y";
+              kcalPerDay = 13.384 * weight_kg + 692.6;
+              formula = "Schofield (weight-only, female 10-19y): (13.384 x weight_kg) + 692.6";
+            }
           } else {
-            kcalPerDay = 16.25 * weight_kg + 1.372 * height_cm + 515.5;
-            formula = "Schofield (boys 10-18y): (16.25 x weight_kg) + (1.372 x height_cm) + 515.5";
+            if (age_years < 3) {
+              band = "male <3y";
+              kcalPerDay = 59.51 * weight_kg - 30.4;
+              formula = "Schofield (weight-only, male <3y): (59.51 x weight_kg) - 30.4";
+            } else if (age_years <= 10) {
+              band = "male 3-10y";
+              kcalPerDay = 22.706 * weight_kg + 504.3;
+              formula = "Schofield (weight-only, male 3-10y): (22.706 x weight_kg) + 504.3";
+            } else {
+              band = "male 10-18y";
+              kcalPerDay = 17.686 * weight_kg + 658.2;
+              formula = "Schofield (weight-only, male 10-18y): (17.686 x weight_kg) + 658.2";
+            }
           }
           return ok(
             {
@@ -184,8 +191,13 @@ export function registerBurnNutritionTools(server: McpServer): void {
               age_band: band,
               estimated_kcal_per_day: Math.round(kcalPerDay),
               formula,
+              note:
+                "height_cm is not used for this pediatric calculation (weight-only equation). For the " +
+                "older weight+height Schofield variant (Rousseau et al 2013, ages 3-18y only), or to " +
+                "compare this against Curreri Junior/Galveston/Mayes/WHO side by side, use " +
+                "burn_pediatric_predictive_equations_comparison.",
             },
-            { disclaimer: BURN_DISCLAIMER, citation: "Schofield equation, pediatric weight+height table" }
+            { disclaimer: BURN_DISCLAIMER, citation: "Mrazek et al, Semin Plast Surg 2024;38:125-132, Table 1 (weight-only Schofield)" }
           );
         }
 
