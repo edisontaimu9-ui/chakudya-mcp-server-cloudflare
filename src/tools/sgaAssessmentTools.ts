@@ -355,4 +355,94 @@ export function registerSgaAssessmentTools(server: McpServer): void {
       );
     })
   );
+
+  // ── Contributing factor: cachexia vs sarcopenia ──────────────────────────
+  server.registerTool(
+    "sga_contributing_factor_classification",
+    {
+      title: "SGA Contributing Factor — Cachexia vs. Sarcopenia",
+      description:
+        "Classify whether the SGA form's 'Contributing Factor' criteria for cachexia or sarcopenia are " +
+        "met. Cachexia: an underlying predisposing disorder (e.g. malignancy) with evidence of reduced " +
+        "muscle AND fat, and no/limited improvement with optimal nutrient intake. Sarcopenia: an " +
+        "underlying disorder (e.g. aging) with evidence of reduced muscle mass AND strength, and " +
+        "no/limited improvement with optimal nutrient intake. These are not mutually exclusive with an " +
+        "SGA B/C rating and are not applied automatically — they're a separate clinical determination " +
+        "the form asks the assessor to consider alongside the main rating.",
+      inputSchema: {
+        has_underlying_predisposing_disorder: z
+          .boolean()
+          .describe("E.g. malignancy or another disease/inflammatory condition (relevant to cachexia) — or aging (relevant to sarcopenia)"),
+        disorder_type: z
+          .enum(["disease_or_inflammatory", "aging", "other"])
+          .optional()
+          .describe("The nature of the underlying disorder, if known — helps distinguish the cachexia vs sarcopenia pathway"),
+        reduced_muscle_mass: z.boolean(),
+        reduced_fat_mass: z.boolean().optional().describe("Relevant to cachexia"),
+        reduced_strength: z.boolean().optional().describe("Relevant to sarcopenia"),
+        improvement_with_optimal_nutrient_intake: z
+          .enum(["none", "limited", "adequate"])
+          .describe("Response to optimal nutrient intake — cachexia/sarcopenia require no or limited improvement"),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    safeTool(
+      "sga_contributing_factor_classification",
+      async ({
+        has_underlying_predisposing_disorder,
+        disorder_type,
+        reduced_muscle_mass,
+        reduced_fat_mass,
+        reduced_strength,
+        improvement_with_optimal_nutrient_intake,
+      }) => {
+        const limitedOrNoImprovement = improvement_with_optimal_nutrient_intake !== "adequate";
+
+        const cachexiaCriteriaMet =
+          has_underlying_predisposing_disorder &&
+          reduced_muscle_mass &&
+          reduced_fat_mass === true &&
+          limitedOrNoImprovement;
+
+        const sarcopeniaCriteriaMet =
+          has_underlying_predisposing_disorder &&
+          reduced_muscle_mass &&
+          reduced_strength === true &&
+          limitedOrNoImprovement;
+
+        const missingForCachexia: string[] = [];
+        if (!has_underlying_predisposing_disorder) missingForCachexia.push("underlying predisposing disorder");
+        if (!reduced_muscle_mass) missingForCachexia.push("reduced muscle mass");
+        if (reduced_fat_mass !== true) missingForCachexia.push("reduced fat mass");
+        if (!limitedOrNoImprovement) missingForCachexia.push("no/limited improvement with optimal nutrient intake (improvement was adequate)");
+
+        const missingForSarcopenia: string[] = [];
+        if (!has_underlying_predisposing_disorder) missingForSarcopenia.push("underlying disorder");
+        if (!reduced_muscle_mass) missingForSarcopenia.push("reduced muscle mass");
+        if (reduced_strength !== true) missingForSarcopenia.push("reduced strength");
+        if (!limitedOrNoImprovement) missingForSarcopenia.push("no/limited improvement with optimal nutrient intake (improvement was adequate)");
+
+        return ok(
+          {
+            cachexia: {
+              criteria_met: cachexiaCriteriaMet,
+              missing_criteria: cachexiaCriteriaMet ? [] : missingForCachexia,
+            },
+            sarcopenia: {
+              criteria_met: sarcopeniaCriteriaMet,
+              missing_criteria: sarcopeniaCriteriaMet ? [] : missingForSarcopenia,
+            },
+            disorder_type_provided: disorder_type ?? null,
+            note:
+              "Per the form: cachexia requires reduced muscle AND fat; sarcopenia requires reduced muscle " +
+              "mass AND strength. Both require an underlying disorder and no/limited improvement despite " +
+              "optimal nutrient intake — distinguishing them from reversible undernutrition. A patient can " +
+              "meet neither, either, or (in principle) both sets of criteria; this is a separate " +
+              "determination from the overall SGA A/B/C rating, not a replacement for it.",
+          },
+          { disclaimer: SGA_DISCLAIMER }
+        );
+      }
+    )
+  );
 }
