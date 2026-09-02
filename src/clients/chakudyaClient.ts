@@ -1,4 +1,4 @@
-import { getEnv } from "../config/env.js";
+import { getEnv, getChakudyaApiBinding } from "../config/env.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -79,12 +79,25 @@ async function request<T = unknown>(
 
   let res: Response;
   try {
-    res = await fetch(url, {
+    // Prefer the service binding — a direct Worker-to-Worker call at the
+    // platform level. A plain fetch() to chakudya-api's public *.workers.dev
+    // URL reliably 404s when made FROM another Worker on the same Cloudflare
+    // account (a documented Cloudflare platform limitation, confirmed via
+    // curl-vs-Worker testing on 2026-09-02 — curl to the exact same URL
+    // returns 200). The binding sidesteps that entirely and is faster too,
+    // since it skips the public network hop. Falls back to plain fetch()
+    // if the binding is ever unset (e.g. local `wrangler dev` without
+    // --remote) so this client still works in that case.
+    const binding = getChakudyaApiBinding();
+    const fetchInit: RequestInit = {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller.signal,
-    });
+    };
+    res = binding
+      ? await binding.fetch(url.toString(), fetchInit)
+      : await fetch(url.toString(), fetchInit);
   } catch (e) {
     clearTimeout(timer);
     const isAbort = e instanceof Error && e.name === "AbortError";

@@ -13,6 +13,10 @@
   },
   "vars": {
     // Non-secret config. Same defaults as the Render deployment's .env.example.
+    // Still set even though the service binding below is preferred at runtime —
+    // it's the fallback used if the binding is ever unavailable (e.g. local
+    // `wrangler dev` without --remote), and it's what CHAKUDYA_ADMIN_API_KEY-style
+    // absolute-URL logging/debugging still refers to.
     "CHAKUDYA_API_BASE_URL": "https://chakudya-api.edisontaimu9.workers.dev",
     "MCP_RATE_LIMIT_PER_MIN": "60",
     // Claude.ai's custom connector setup calls the OAuth endpoints
@@ -20,7 +24,22 @@
     // to be explicitly allowed here or the browser blocks the response
     // before the OAuth flow can complete.
     "MCP_ALLOWED_ORIGINS": "https://claude.ai,https://claude.com"
-  }
+  },
+  // Service binding to the chakudya-api Worker. A Worker fetching another
+  // Worker's public *.workers.dev URL under the SAME Cloudflare account
+  // reliably 404s (a documented Cloudflare platform limitation — see
+  // community.cloudflare.com/t/how-to-access-another-worker-without-binding/666220).
+  // This binding calls chakudya-api directly at the platform level instead,
+  // bypassing that public-URL routing entirely (and it's faster, since it
+  // skips the network hop too). "service" must match chakudya-api's exact
+  // Worker script name as shown in the Cloudflare dashboard — update it here
+  // if that name is ever different from "chakudya-api".
+  "services": [
+    {
+      "binding": "CHAKUDYA_API",
+      "service": "chakudya-api"
+    }
+  ]
   // Secrets (MCP_AUTH_TOKEN, and optionally CHAKUDYA_ADMIN_API_KEY) are NOT
   // set here — see README.md. Set them with:
   //   npx wrangler secret put MCP_AUTH_TOKEN

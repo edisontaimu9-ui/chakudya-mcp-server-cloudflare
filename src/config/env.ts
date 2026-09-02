@@ -19,6 +19,16 @@ export interface WorkerBindings {
   MCP_ALLOWED_ORIGINS?: string;
   MCP_RATE_LIMIT_PER_MIN?: string;
   ENVIRONMENT?: string; // "production" | "development" — set via vars if you want dev logging
+  /**
+   * Service binding to the chakudya-api Worker (see the "services" entry in
+   * wrangler.jsonc). Not a plain string, so it's kept out of EnvSchema below
+   * and cached separately — see getChakudyaApiBinding(). Optional because it
+   * won't exist in local `wrangler dev` runs without --remote, or if the
+   * binding is ever removed from wrangler.jsonc; chakudyaClient.ts falls
+   * back to a plain public fetch() against CHAKUDYA_API_BASE_URL when this
+   * is undefined.
+   */
+  CHAKUDYA_API?: Fetcher;
 }
 
 const EnvSchema = z.object({
@@ -36,6 +46,7 @@ const EnvSchema = z.object({
 export type AppEnv = z.infer<typeof EnvSchema>;
 
 let cached: AppEnv | undefined;
+let cachedServiceBinding: Fetcher | undefined;
 
 /** Call once at the top of the fetch handler, before anything else touches config. */
 export function initEnv(raw: WorkerBindings): AppEnv {
@@ -59,6 +70,7 @@ export function initEnv(raw: WorkerBindings): AppEnv {
   }
 
   cached = parsed.data;
+  cachedServiceBinding = raw.CHAKUDYA_API;
   return cached;
 }
 
@@ -68,4 +80,13 @@ export function getEnv(): AppEnv {
     throw new Error("[env] getEnv() called before initEnv(). This is a bug in index.ts.");
   }
   return cached;
+}
+
+/**
+ * Read the chakudya-api service binding, if present this isolate. Returns
+ * undefined (not a throw) when unset, so callers can cleanly fall back to a
+ * plain public fetch() — see chakudyaClient.ts.
+ */
+export function getChakudyaApiBinding(): Fetcher | undefined {
+  return cachedServiceBinding;
 }
