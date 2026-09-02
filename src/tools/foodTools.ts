@@ -206,13 +206,27 @@ export function registerFoodTools(server: McpServer) {
       },
     },
     safeTool("analyze_meal", async ({ items }) => {
-      const totals: Record<string, number> = {
+      const sums: Record<string, number> = {
         energy_kcal: 0,
         protein_g: 0,
         fat_g: 0,
         carbs_g: 0,
         fiber_g: 0,
         sodium_mg: 0,
+      };
+      // Tracks, per nutrient, whether ANY item in the meal actually had a
+      // measured (non-null) value for it. A nutrient with no contributing
+      // data anywhere in the meal reports as null in totals — not 0 — so a
+      // meal built entirely from foods with unentered micronutrients (see
+      // Likuni Phala/milk test, 2026-09-02) doesn't read as "measured zero
+      // fiber" when the true answer is "not yet in the database."
+      const hasData: Record<string, boolean> = {
+        energy_kcal: false,
+        protein_g: false,
+        fat_g: false,
+        carbs_g: false,
+        fiber_g: false,
+        sodium_mg: false,
       };
       const breakdown: unknown[] = [];
       const warnings: string[] = [];
@@ -224,7 +238,10 @@ export function registerFoodTools(server: McpServer) {
           breakdown.push({ food_name: food.food_name, quantity_grams: item.quantity_grams, nutrients: scaled });
           for (const key of NUTRIENT_KEYS) {
             const v = scaled[key];
-            if (typeof v === "number") totals[key] += v;
+            if (typeof v === "number") {
+              sums[key] += v;
+              hasData[key] = true;
+            }
           }
         } catch (e) {
           const label = item.food_name ?? item.food_id ?? "unknown item";
@@ -232,8 +249,9 @@ export function registerFoodTools(server: McpServer) {
         }
       }
 
-      for (const key of Object.keys(totals)) {
-        totals[key] = Math.round(totals[key] * 100) / 100;
+      const totals: Record<string, number | null> = {};
+      for (const key of Object.keys(sums)) {
+        totals[key] = hasData[key] ? Math.round(sums[key] * 100) / 100 : null;
       }
 
       return ok(
