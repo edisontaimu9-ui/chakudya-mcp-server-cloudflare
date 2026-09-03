@@ -11,9 +11,10 @@ import { ok, safeTool } from "../utils/toolResult.js";
  * Pure calculation — no Chakudya API calls. Used when a patient cannot be
  * measured directly (e.g. bedridden, contractures, amputation).
  *
- * Two tools:
+ * Three tools:
  *   - stature_from_knee_height   (Lee & Nieman)
  *   - stature_from_demi_span     (Gibson)
+ *   - stature_from_ulna_length   (lookup table, source unlabeled in guideline)
  */
 
 const STATURE_DISCLAIMER =
@@ -131,6 +132,51 @@ function selectDemiSpanRow(sex: Sex, ageYears: number): DemiSpanRow | undefined 
   return candidates.find((r) => (r.age_max === null ? ageYears >= r.age_min : ageYears >= r.age_min && ageYears <= r.age_max));
 }
 
+// ── 1.3 Ulna (forearm) length lookup table ──────────────────────────────────
+// Predicted height (m) from ulna length (cm), in 0.5cm increments, by sex
+// and age band (<65 / >65 years).
+interface UlnaRow {
+  ulna_cm: number;
+  men_lt65_m: number;
+  men_gt65_m: number;
+  women_lt65_m: number;
+  women_gt65_m: number;
+}
+
+const ULNA_HEIGHT_TABLE: UlnaRow[] = [
+  { ulna_cm: 32.0, men_lt65_m: 1.94, men_gt65_m: 1.87, women_lt65_m: 1.84, women_gt65_m: 1.84 },
+  { ulna_cm: 31.5, men_lt65_m: 1.93, men_gt65_m: 1.86, women_lt65_m: 1.83, women_gt65_m: 1.83 },
+  { ulna_cm: 31.0, men_lt65_m: 1.91, men_gt65_m: 1.84, women_lt65_m: 1.81, women_gt65_m: 1.81 },
+  { ulna_cm: 30.5, men_lt65_m: 1.89, men_gt65_m: 1.82, women_lt65_m: 1.80, women_gt65_m: 1.79 },
+  // men_gt65_m at 30.0cm (1.71) breaks the otherwise-monotonic sequence between
+  // 30.5cm (1.82) and 29.5cm (1.79) — reproduced as printed in the source table,
+  // but likely a print/scan error; verify against source if precision matters here.
+  { ulna_cm: 30.0, men_lt65_m: 1.87, men_gt65_m: 1.71, women_lt65_m: 1.79, women_gt65_m: 1.78 },
+  { ulna_cm: 29.5, men_lt65_m: 1.85, men_gt65_m: 1.79, women_lt65_m: 1.77, women_gt65_m: 1.76 },
+  { ulna_cm: 29.0, men_lt65_m: 1.84, men_gt65_m: 1.78, women_lt65_m: 1.76, women_gt65_m: 1.75 },
+  { ulna_cm: 28.5, men_lt65_m: 1.82, men_gt65_m: 1.76, women_lt65_m: 1.75, women_gt65_m: 1.73 },
+  { ulna_cm: 28.0, men_lt65_m: 1.80, men_gt65_m: 1.75, women_lt65_m: 1.73, women_gt65_m: 1.71 },
+  { ulna_cm: 27.5, men_lt65_m: 1.78, men_gt65_m: 1.73, women_lt65_m: 1.72, women_gt65_m: 1.70 },
+  { ulna_cm: 27.0, men_lt65_m: 1.76, men_gt65_m: 1.71, women_lt65_m: 1.70, women_gt65_m: 1.68 },
+  { ulna_cm: 26.5, men_lt65_m: 1.75, men_gt65_m: 1.70, women_lt65_m: 1.69, women_gt65_m: 1.66 },
+  { ulna_cm: 26.0, men_lt65_m: 1.73, men_gt65_m: 1.68, women_lt65_m: 1.68, women_gt65_m: 1.65 },
+  { ulna_cm: 25.5, men_lt65_m: 1.71, men_gt65_m: 1.67, women_lt65_m: 1.66, women_gt65_m: 1.63 },
+  { ulna_cm: 25.0, men_lt65_m: 1.69, men_gt65_m: 1.65, women_lt65_m: 1.65, women_gt65_m: 1.61 },
+  { ulna_cm: 24.5, men_lt65_m: 1.67, men_gt65_m: 1.63, women_lt65_m: 1.63, women_gt65_m: 1.60 },
+  { ulna_cm: 24.0, men_lt65_m: 1.66, men_gt65_m: 1.62, women_lt65_m: 1.62, women_gt65_m: 1.58 },
+  { ulna_cm: 23.5, men_lt65_m: 1.64, men_gt65_m: 1.60, women_lt65_m: 1.61, women_gt65_m: 1.56 },
+  { ulna_cm: 23.0, men_lt65_m: 1.62, men_gt65_m: 1.59, women_lt65_m: 1.59, women_gt65_m: 1.55 },
+  { ulna_cm: 22.5, men_lt65_m: 1.60, men_gt65_m: 1.57, women_lt65_m: 1.58, women_gt65_m: 1.53 },
+  { ulna_cm: 22.0, men_lt65_m: 1.58, men_gt65_m: 1.56, women_lt65_m: 1.56, women_gt65_m: 1.52 },
+  { ulna_cm: 21.5, men_lt65_m: 1.57, men_gt65_m: 1.54, women_lt65_m: 1.55, women_gt65_m: 1.50 },
+  { ulna_cm: 21.0, men_lt65_m: 1.56, men_gt65_m: 1.52, women_lt65_m: 1.54, women_gt65_m: 1.48 },
+  { ulna_cm: 20.5, men_lt65_m: 1.53, men_gt65_m: 1.51, women_lt65_m: 1.52, women_gt65_m: 1.47 },
+  { ulna_cm: 20.0, men_lt65_m: 1.51, men_gt65_m: 1.49, women_lt65_m: 1.51, women_gt65_m: 1.45 },
+  { ulna_cm: 19.5, men_lt65_m: 1.49, men_gt65_m: 1.48, women_lt65_m: 1.50, women_gt65_m: 1.44 },
+  { ulna_cm: 19.0, men_lt65_m: 1.48, men_gt65_m: 1.46, women_lt65_m: 1.48, women_gt65_m: 1.42 },
+  { ulna_cm: 18.5, men_lt65_m: 1.46, men_gt65_m: 1.45, women_lt65_m: 1.47, women_gt65_m: 1.40 },
+];
+
 export function registerStatureEstimationTools(server: McpServer) {
   // ── stature_from_knee_height ───────────────────────────────────────────────
   server.registerTool(
@@ -208,6 +254,51 @@ export function registerStatureEstimationTools(server: McpServer) {
           note: "DS: demi span in cm.",
         },
         { disclaimer: STATURE_DISCLAIMER, citation: "Gibson" }
+      );
+    })
+  );
+
+  // ── stature_from_ulna_length ───────────────────────────────────────────────
+  server.registerTool(
+    "stature_from_ulna_length",
+    {
+      title: "Stature from Ulna (Forearm) Length",
+      description:
+        "Look up predicted height (m) from ulna (forearm) length, sex, and age band (<65 or >=65 years), " +
+        "using a reference table in 0.5cm ulna-length increments (range 18.5-32.0cm). The input value is " +
+        "rounded to the nearest 0.5cm table entry.",
+      inputSchema: {
+        sex: z.enum(["male", "female"]),
+        age_years: z.number().positive(),
+        ulna_length_cm: z.number().min(18.5).max(32.0),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    safeTool("stature_from_ulna_length", async ({ sex, age_years, ulna_length_cm }) => {
+      const roundedUlna = Math.round(ulna_length_cm * 2) / 2;
+      const row = ULNA_HEIGHT_TABLE.find((r) => r.ulna_cm === roundedUlna);
+      if (!row) {
+        return err(`ulna_length_cm ${ulna_length_cm} is outside the table range (18.5-32.0cm).`);
+      }
+      const ageBand = age_years >= 65 ? "gt65" : "lt65";
+      const heightM =
+        sex === "male" ? (ageBand === "lt65" ? row.men_lt65_m : row.men_gt65_m) : ageBand === "lt65" ? row.women_lt65_m : row.women_gt65_m;
+
+      return ok(
+        {
+          sex,
+          age_years,
+          age_band: ageBand === "lt65" ? "<65 years" : ">=65 years",
+          ulna_length_cm,
+          matched_table_ulna_cm: roundedUlna,
+          estimated_height_m: heightM,
+          estimated_height_cm: Math.round(heightM * 100),
+          note:
+            roundedUlna === 30.0 && sex === "male" && ageBand === "gt65"
+              ? "This table cell (men >65 years, 30.0cm ulna = 1.71m) breaks the otherwise-monotonic sequence in the source table and may be a print/scan error — verify against source."
+              : undefined,
+        },
+        { disclaimer: STATURE_DISCLAIMER }
       );
     })
   );
