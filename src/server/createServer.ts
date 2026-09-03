@@ -17,6 +17,7 @@ import { registerAdjustedBodyWeightTools } from "../tools/adjustedBodyWeightTool
 import { registerIndicationEnergyProteinTools } from "../tools/indicationEnergyProteinTools.js";
 import { registerHarrisBenedictStressFactorTools } from "../tools/harrisBenedictStressFactorTools.js";
 import { registerCriticalCareNutritionSupportTools } from "../tools/criticalCareNutritionSupportTools.js";
+import { registerStatureEstimationTools } from "../tools/statureEstimationTools.js";
 
 /**
  * Builds a new McpServer instance with every Chakudya tool registered.
@@ -50,6 +51,7 @@ export function createChakudyaMcpServer(): McpServer {
   registerIndicationEnergyProteinTools(server);
   registerHarrisBenedictStressFactorTools(server);
   registerCriticalCareNutritionSupportTools(server);
+  registerStatureEstimationTools(server);
 
   return server;
 }
