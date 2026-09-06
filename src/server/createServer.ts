@@ -23,6 +23,7 @@ import { registerBodyWeightAdjustmentTools } from "../tools/bodyWeightAdjustment
 import { registerAnthropometricClassificationTools } from "../tools/anthropometricClassificationTools.js";
 import { registerDietaryReferenceIntakeTables } from "../tools/dietaryReferenceIntakeTables.js";
 import { registerClinicalReferenceRangesTools } from "../tools/clinicalReferenceRangesTools.js";
+import { registerCarbCountingDoseAdjustmentTools } from "../tools/carbCountingDoseAdjustmentTools.js";
 
 /**
  * Builds a new McpServer instance with every Chakudya tool registered.
@@ -62,6 +63,7 @@ export function createChakudyaMcpServer(): McpServer {
   registerAnthropometricClassificationTools(server);
   registerDietaryReferenceIntakeTables(server);
   registerClinicalReferenceRangesTools(server);
+  registerCarbCountingDoseAdjustmentTools(server);
 
   return server;
 }
