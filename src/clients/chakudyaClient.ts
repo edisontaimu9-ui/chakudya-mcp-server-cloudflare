@@ -46,7 +46,7 @@ function buildUrl(path: string, params?: Record<string, string | number | boolea
 }
 
 async function request<T = unknown>(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   path: string,
   opts: {
     params?: Record<string, string | number | boolean | undefined>;
@@ -133,9 +133,19 @@ async function request<T = unknown>(
 }
 
 export const chakudyaClient = {
-  get: <T = unknown>(path: string, params?: Record<string, string | number | boolean | undefined>) =>
-    request<T>("GET", path, { params }),
+  get: <T = unknown>(
+    path: string,
+    params?: Record<string, string | number | boolean | undefined>,
+    opts: { useAdminKey?: boolean } = {}
+  ) => request<T>("GET", path, { params, useAdminKey: opts.useAdminKey }),
 
   post: <T = unknown>(path: string, body: unknown, opts: { useAdminKey?: boolean } = {}) =>
     request<T>("POST", path, { body, useAdminKey: opts.useAdminKey }),
+
+  // Named `del`, not `delete` — `delete` is a reserved word as an object
+  // property accessor style method name in some lint configs and reads
+  // oddly as `chakudyaClient.delete(...)`; `del` mirrors common HTTP client
+  // conventions (e.g. node-fetch wrappers, superagent).
+  del: <T = unknown>(path: string, body: unknown, opts: { useAdminKey?: boolean } = {}) =>
+    request<T>("DELETE", path, { body, useAdminKey: opts.useAdminKey }),
 };

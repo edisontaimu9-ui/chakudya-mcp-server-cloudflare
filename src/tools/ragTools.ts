@@ -104,4 +104,31 @@ export function registerRagTools(server: McpServer) {
       return ok(res.data);
     })
   );
+
+  // ── ingest_document (admin) ─────────────────────────────────────────────
+  server.registerTool(
+    "ingest_document",
+    {
+      title: "Ingest a Document into the RAG Knowledge Base (Admin)",
+      description:
+        "Add a new document's content into the Chakudya RAG knowledge base so it becomes retrievable via " +
+        "rag_retrieve/search_guidelines/retrieve_evidence. Requires CHAKUDYA_ADMIN_API_KEY to be " +
+        "configured on this MCP server.",
+      inputSchema: {
+        content: z.string().min(1),
+        source: z.string().min(1).describe("Citation-friendly source label, e.g. a document title"),
+        context: z.enum(["clinical", "general", "both"]).optional().default("both"),
+        metadata: z.record(z.unknown()).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    safeTool("ingest_document", async ({ content, source, context, metadata }) => {
+      const res = await chakudyaClient.post(
+        "/rag/ingest",
+        { content, source, context, metadata },
+        { useAdminKey: true }
+      );
+      return ok(res.data ?? res);
+    })
+  );
 }

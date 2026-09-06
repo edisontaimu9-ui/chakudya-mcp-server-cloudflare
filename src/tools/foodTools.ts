@@ -334,4 +334,45 @@ export function registerFoodTools(server: McpServer) {
       return ok(res.data ?? [], { source: "community_packaged_foods" });
     })
   );
+
+  // ── foods_autocomplete ───────────────────────────────────────────────────
+  server.registerTool(
+    "foods_autocomplete",
+    {
+      title: "Food Search Autocomplete",
+      description:
+        "Search-as-you-type suggestions for a partial food name (e.g. 'chic' -> 'chicken breast', " +
+        "'chicken soup'). Wraps FatSecret's Premier-only autocomplete endpoint on the Chakudya API side — " +
+        "returns a 503-derived error on deployments without FATSECRET_CONSUMER_KEY/SECRET configured on a " +
+        "Premier or Premier Free plan. Use search_food instead for the primary, always-available search.",
+      inputSchema: {
+        q: z.string().min(1).describe("Partial search expression, e.g. 'chic'"),
+        max_results: z.number().int().positive().max(10).optional().default(4),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    safeTool("foods_autocomplete", async ({ q, max_results }) => {
+      const res = await chakudyaClient.get<string[]>("/foods/autocomplete", { q, max_results });
+      return ok(res.data ?? []);
+    })
+  );
+
+  // ── foods_categories ─────────────────────────────────────────────────────
+  server.registerTool(
+    "foods_categories",
+    {
+      title: "Food Category List",
+      description:
+        "List the standard food category reference list (near-static, cached 24h server-side). Wraps " +
+        "FatSecret's Premier-only food_categories endpoint on the Chakudya API side — returns a " +
+        "503-derived error on deployments without FATSECRET_CONSUMER_KEY/SECRET configured on a Premier " +
+        "or Premier Free plan.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    safeTool("foods_categories", async () => {
+      const res = await chakudyaClient.get("/foods/categories");
+      return ok(res.data ?? []);
+    })
+  );
 }
