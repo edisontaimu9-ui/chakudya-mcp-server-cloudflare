@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { chakudyaClient, ChakudyaApiError } from "../clients/chakudyaClient.js";
 import { ok, safeTool } from "../utils/toolResult.js";
+import { logger } from "../utils/logger.js";
 
 /** Per-100g/ml nutrient shape returned by every CNR food source. */
 interface CnrFood {
@@ -70,13 +71,16 @@ export function registerFoodTools(server: McpServer) {
     {
       title: "Search Food",
       description:
-        "Search the Chakudya Nutrition Registry (Malawi food composition database) by name. " +
-        "Searches the local database first; if nothing matches locally, falls back to the " +
-        "external lookup cascade (USDA FoodData Central / Open Food Facts / FatSecret). " +
-        "Use this to find a food before calling get_food_details or calculate_nutrients.",
+        "Search the Chakudya Nutrition Registry (Malawi food composition database) by name. Three tiers, " +
+        "same order as the Chakudya API's own internal lookup cascade: (1) exact/substring match in the " +
+        "local database, (2) typo-tolerant fuzzy match against the local database (handles misspellings " +
+        "like 'Chinagwa' for 'Chinangwa', or a plain English name against a Chichewa-labelled entry), " +
+        "(3) external lookup cascade (USDA FoodData Central / Open Food Facts / FatSecret) for foods not " +
+        "in the local database at all. Use this to find a food before calling get_food_details or " +
+        "calculate_nutrients.",
       inputSchema: {
         query: z.string().min(1).describe("Food name to search for, e.g. 'nsima' or 'banana'"),
-        category: z.string().optional().describe("Optional category filter"),
+        category: z.string().optional().describe("Optional category filter — only applies to the exact/substring tier"),
         limit: z.number().int().positive().max(100).optional().default(10),
       },
       annotations: {
@@ -93,7 +97,31 @@ export function registerFoodTools(server: McpServer) {
         return ok(localResults, { source: "local_database", count: localResults.length });
       }
 
-      // Fall back to the external cascade for foods not yet in CNR.
+      // Tier 2 — typo-tolerant fuzzy match (pg_trgm word_similarity +
+      // levenshtein tiebreak, local database only). Catches misspellings
+      // and Chichewa/English name mismatches that a plain ilike substring
+      // search (tier 1, above) can't, before paying the cost of an
+      // external API cascade call.
+      try {
+        const fuzzy = await chakudyaClient.get<CnrFood[]>("/foods/search", { q: query, max_results: limit });
+        const fuzzyResults = Array.isArray(fuzzy.data) ? fuzzy.data.map(normalizeFood) : [];
+        if (fuzzyResults.length > 0) {
+          return ok(fuzzyResults, {
+            source: "local_database_fuzzy_match",
+            count: fuzzyResults.length,
+            note: "No exact match — these are the closest typo-tolerant matches in the local database.",
+          });
+        }
+      } catch (e) {
+        // A fuzzy-search failure shouldn't block falling through to the
+        // external cascade below — log via rethrow only on unexpected
+        // (non-404) errors, same pattern as the external-fallback catch.
+        if (!(e instanceof ChakudyaApiError) || e.status !== 404) {
+          logger.warn("fuzzy_food_search_failed", { query, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+
+      // Tier 3 — external cascade for foods not in CNR's local database at all.
       // Note: /foods/lookup returns a single best-match object under `data`
       // (not an array, unlike /foods), so normalize both shapes here.
       try {
@@ -106,11 +134,11 @@ export function registerFoodTools(server: McpServer) {
             : [];
         return ok(fallbackResults, {
           source: "external_fallback",
-          note: "Not found locally; retrieved via USDA/OpenFoodFacts/FatSecret cascade and cached for next time.",
+          note: "Not found locally (exact or fuzzy); retrieved via USDA/OpenFoodFacts/FatSecret cascade and cached for next time.",
         });
       } catch (e) {
         if (e instanceof ChakudyaApiError && e.status === 404) {
-          return ok([], { source: "none", message: `No match for "${query}" in local or external sources.` });
+          return ok([], { source: "none", message: `No match for "${query}" in local (exact or fuzzy) or external sources.` });
         }
         throw e;
       }
