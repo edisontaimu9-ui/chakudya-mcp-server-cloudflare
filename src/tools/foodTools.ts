@@ -375,4 +375,62 @@ export function registerFoodTools(server: McpServer) {
       return ok(res.data ?? []);
     })
   );
+
+  // ── get_food_serving_sizes ───────────────────────────────────────────────
+  server.registerTool(
+    "get_food_serving_sizes",
+    {
+      title: "Get Realistic Serving Sizes For A Food",
+      description:
+        "Get realistic Malawian household serving sizes for a food (e.g. '1 medium nsima ball — 350g'), " +
+        "each with nutrients pre-scaled from the database's 100g/100ml basis, so no manual grams math is " +
+        "needed. Three tiers, most authoritative first: the food's own Malawi FCT household-measure entry, " +
+        "a locally-curated keyword match for that specific food, or a generic category fallback — the raw " +
+        "100g/100ml reference is always included too. Use search_food first to find the food_id.",
+      inputSchema: {
+        food_id: z.union([z.string(), z.number()]).describe("The CNR food id from search_food"),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    safeTool("get_food_serving_sizes", async ({ food_id }) => {
+      const res = await chakudyaClient.get<CnrFood>(`/foods/${food_id}`, { with_servings: true });
+      const food = res.data;
+      if (!food) return ok({ serving_sizes: [] });
+      return ok({
+        food_id: food.id ?? food_id,
+        food_name: food.food_name,
+        serving_sizes: (food as { serving_sizes?: unknown }).serving_sizes ?? [],
+      });
+    })
+  );
+
+  // ── generate_nutrition_label ─────────────────────────────────────────────
+  server.registerTool(
+    "generate_nutrition_label",
+    {
+      title: "Generate a Nutrition Facts Label",
+      description:
+        "Generate a formatted Nutrition Facts label for a food, scaled to a chosen serving size (falls back " +
+        "to the most authoritative serving_sizes entry — see get_food_serving_sizes — if 'serving' isn't " +
+        "given or doesn't match). Returns the label plus the alternate servings it could have been built " +
+        "from. Use search_food first to find the food_id.",
+      inputSchema: {
+        food_id: z.union([z.string(), z.number()]).describe("The CNR food id from search_food"),
+        serving: z
+          .string()
+          .optional()
+          .describe("Optional case-insensitive substring to pick a specific serving label (e.g. 'cup', '100g'); omit for the default"),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    safeTool("generate_nutrition_label", async ({ food_id, serving }) => {
+      const res = await chakudyaClient.get(`/foods/${food_id}/label`, { serving });
+      return ok(res.data ?? res, {
+        food_id: (res as { food_id?: unknown }).food_id,
+        food_name: (res as { food_name?: unknown }).food_name,
+        serving_source: (res as { serving_source?: unknown }).serving_source,
+        alternate_servings: (res as { alternate_servings?: unknown }).alternate_servings,
+      });
+    })
+  );
 }

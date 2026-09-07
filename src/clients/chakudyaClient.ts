@@ -146,6 +146,15 @@ export const chakudyaClient = {
   // property accessor style method name in some lint configs and reads
   // oddly as `chakudyaClient.delete(...)`; `del` mirrors common HTTP client
   // conventions (e.g. node-fetch wrappers, superagent).
-  del: <T = unknown>(path: string, body: unknown, opts: { useAdminKey?: boolean } = {}) =>
-    request<T>("DELETE", path, { body, useAdminKey: opts.useAdminKey }),
+  //
+  // Chakudya's own DELETE routes aren't consistent about where identifying
+  // info goes: DELETE /favorites takes a JSON body (no id in the path),
+  // while DELETE /log/:id takes the id in the path plus ?user_id= as a
+  // query param with no body at all. Support both via params + body so
+  // callers don't have to work around a body-only client.
+  del: <T = unknown>(
+    path: string,
+    body?: unknown,
+    opts: { useAdminKey?: boolean; params?: Record<string, string | number | boolean | undefined> } = {}
+  ) => request<T>("DELETE", path, { body, params: opts.params, useAdminKey: opts.useAdminKey }),
 };

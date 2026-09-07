@@ -27,6 +27,11 @@ import { registerCarbCountingDoseAdjustmentTools } from "../tools/carbCountingDo
 import { registerUserDataTools } from "../tools/userDataTools.js";
 import { registerMemoryTools } from "../tools/memoryTools.js";
 import { registerPackagedSubmissionTools } from "../tools/packagedSubmissionTools.js";
+import { registerRecipeMealTools } from "../tools/recipeMealTools.js";
+import { registerFoodLogTools } from "../tools/foodLogTools.js";
+import { registerDriApiTools } from "../tools/driApiTools.js";
+import { registerFoodComparisonTools } from "../tools/foodComparisonTools.js";
+import { registerDrugInteractionGlycaemicTools } from "../tools/drugInteractionGlycaemicTools.js";
 
 /**
  * Builds a new McpServer instance with every Chakudya tool registered.
@@ -70,6 +75,11 @@ export function createChakudyaMcpServer(): McpServer {
   registerUserDataTools(server);
   registerMemoryTools(server);
   registerPackagedSubmissionTools(server);
+  registerRecipeMealTools(server);
+  registerFoodLogTools(server);
+  registerDriApiTools(server);
+  registerFoodComparisonTools(server);
+  registerDrugInteractionGlycaemicTools(server);
 
   return server;
 }
