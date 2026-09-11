@@ -56,7 +56,7 @@ export function registerRecipeMealTools(server: McpServer) {
       title: "Calculate Recipe Nutrition",
       description:
         "Given a recipe's ingredients (each with quantity and optional unit) and how many servings it " +
-        "yields, resolve every ingredient (local database first, then the external lookup cascade), sum " +
+        "yields, resolve every ingredient (local database first, then the registry's wider data tier), sum " +
         "nutrients across the whole recipe, and divide by servings to get per-serving figures plus a " +
         "generated nutrition label. Each ingredient needs food_id or food_name plus quantity; unit " +
         "defaults to grams if omitted.",

@@ -10,7 +10,7 @@ interface CnrFood {
   food_name: string;
   category?: string | null;
   // Local Malawi FCT rows (from /foods, /foods/:id) store calories as `kcal`;
-  // only the /foods/lookup external-cascade fallback normalizes to
+  // only the /foods/lookup wider-tier fallback normalizes to
   // `energy_kcal`. Accept both and prefer whichever is present.
   energy_kcal?: number | null;
   kcal?: number | null;
@@ -75,8 +75,9 @@ export function registerFoodTools(server: McpServer) {
         "same order as the Chakudya API's own internal lookup cascade: (1) exact/substring match in the " +
         "local database, (2) typo-tolerant fuzzy match against the local database (handles misspellings " +
         "like 'Chinagwa' for 'Chinangwa', or a plain English name against a Chichewa-labelled entry), " +
-        "(3) external lookup cascade (USDA FoodData Central / Open Food Facts / FatSecret) for foods not " +
-        "in the local database at all. Use this to find a food before calling get_food_details or " +
+        "(3) the registry's wider data tier (USDA FoodData Central / Open Food Facts / FatSecret, " +
+        "consolidated into the CNR) for foods not in the local database at all. Use this to find a food " +
+        "before calling get_food_details or " +
         "calculate_nutrients.",
       inputSchema: {
         query: z.string().min(1).describe("Food name to search for, e.g. 'nsima' or 'banana'"),
@@ -100,8 +101,8 @@ export function registerFoodTools(server: McpServer) {
       // Tier 2 — typo-tolerant fuzzy match (pg_trgm word_similarity +
       // levenshtein tiebreak, local database only). Catches misspellings
       // and Chichewa/English name mismatches that a plain ilike substring
-      // search (tier 1, above) can't, before paying the cost of an
-      // external API cascade call.
+      // search (tier 1, above) can't, before paying the cost of a call to
+      // the registry's wider (USDA/OFF/FatSecret) data tier.
       try {
         const fuzzy = await chakudyaClient.get<CnrFood[]>("/foods/search", { q: query, max_results: limit });
         const fuzzyResults = Array.isArray(fuzzy.data) ? fuzzy.data.map(normalizeFood) : [];
@@ -114,16 +115,18 @@ export function registerFoodTools(server: McpServer) {
         }
       } catch (e) {
         // A fuzzy-search failure shouldn't block falling through to the
-        // external cascade below — log via rethrow only on unexpected
-        // (non-404) errors, same pattern as the external-fallback catch.
+        // wider CNR data tier below — log via rethrow only on unexpected
+        // (non-404) errors, same pattern as the catch below it.
         if (!(e instanceof ChakudyaApiError) || e.status !== 404) {
           logger.warn("fuzzy_food_search_failed", { query, error: e instanceof Error ? e.message : String(e) });
         }
       }
 
-      // Tier 3 — external cascade for foods not in CNR's local database at all.
-      // Note: /foods/lookup returns a single best-match object under `data`
-      // (not an array, unlike /foods), so normalize both shapes here.
+      // Tier 3 — the registry's wider USDA/OFF/FatSecret data tier, for foods
+      // not in CNR's local database at all. This is still part of the
+      // Chakudya Nutrition Registry, just a different (remote-backed) tier
+      // of it. Note: /foods/lookup returns a single best-match object under
+      // `data` (not an array, unlike /foods), so normalize both shapes here.
       try {
         const fallback = await chakudyaClient.get<CnrFood[] | CnrFood>("/foods/lookup", { q: query });
         const raw = fallback.data;
@@ -133,12 +136,12 @@ export function registerFoodTools(server: McpServer) {
             ? [normalizeFood(raw)]
             : [];
         return ok(fallbackResults, {
-          source: "external_fallback",
-          note: "Not found locally (exact or fuzzy); retrieved via USDA/OpenFoodFacts/FatSecret cascade and cached for next time.",
+          source: "cnr_wider_tier",
+          note: "Not found in the local CNR tables (exact or fuzzy); resolved via the registry's USDA/OpenFoodFacts/FatSecret tier and cached for next time.",
         });
       } catch (e) {
         if (e instanceof ChakudyaApiError && e.status === 404) {
-          return ok([], { source: "none", message: `No match for "${query}" in local (exact or fuzzy) or external sources.` });
+          return ok([], { source: "none", message: `No match for "${query}" anywhere in the Chakudya Nutrition Registry (local or wider tiers).` });
         }
         throw e;
       }
@@ -296,7 +299,7 @@ export function registerFoodTools(server: McpServer) {
       title: "Packaged Product Lookup",
       description:
         "Look up a packaged food product by barcode (EAN/UPC) and/or free-text product name. Checks the " +
-        "community-submitted packaged foods table first, then falls back to the external cascade " +
+        "community-submitted packaged foods table first, then falls back to the registry's wider data tier " +
         "(USDA FoodData Central / Open Food Facts / FatSecret) via the CNR foods/lookup route. At least " +
         "one of barcode or query must be provided.",
       inputSchema: {
@@ -323,7 +326,7 @@ export function registerFoodTools(server: McpServer) {
 
       try {
         const fallback = await chakudyaClient.get("/foods/lookup", { barcode, q: query });
-        return ok(fallback.data ?? [], { source: "external_fallback" });
+        return ok(fallback.data ?? [], { source: "cnr_wider_tier" });
       } catch (e) {
         if (e instanceof ChakudyaApiError && e.status === 404) {
           return ok([], { message: `No product found for ${barcode ? `barcode ${barcode}` : `"${query}"`}` });
@@ -370,9 +373,10 @@ export function registerFoodTools(server: McpServer) {
       title: "Food Search Autocomplete",
       description:
         "Search-as-you-type suggestions for a partial food name (e.g. 'chic' -> 'chicken breast', " +
-        "'chicken soup'). Wraps FatSecret's Premier-only autocomplete endpoint on the Chakudya API side — " +
-        "returns a 503-derived error on deployments without FATSECRET_CONSUMER_KEY/SECRET configured on a " +
-        "Premier or Premier Free plan. Use search_food instead for the primary, always-available search.",
+        "'chicken soup'). Checks the local CNR tables first, then the registry's FatSecret-backed tier " +
+        "for anything with no local coverage — the FatSecret tier returns a 503-derived error on " +
+        "deployments without FATSECRET_CONSUMER_KEY/SECRET configured on a Premier or Premier Free plan. " +
+        "Use search_food instead for the primary, always-available search.",
       inputSchema: {
         query: z.string().min(1).describe("Partial search expression, e.g. 'chic'"),
         max_results: z.number().int().positive().max(10).optional().default(4),
@@ -391,10 +395,9 @@ export function registerFoodTools(server: McpServer) {
     {
       title: "Food Category List",
       description:
-        "List the standard food category reference list (near-static, cached 24h server-side). Wraps " +
-        "FatSecret's Premier-only food_categories endpoint on the Chakudya API side — returns a " +
-        "503-derived error on deployments without FATSECRET_CONSUMER_KEY/SECRET configured on a Premier " +
-        "or Premier Free plan.",
+        "List the standard food category reference list (near-static, cached 24h server-side), from the " +
+        "registry's FatSecret-backed tier — returns a 503-derived error on deployments without " +
+        "FATSECRET_CONSUMER_KEY/SECRET configured on a Premier or Premier Free plan.",
       inputSchema: {},
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
