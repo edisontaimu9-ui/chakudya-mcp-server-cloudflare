@@ -374,13 +374,13 @@ export function registerFoodTools(server: McpServer) {
         "returns a 503-derived error on deployments without FATSECRET_CONSUMER_KEY/SECRET configured on a " +
         "Premier or Premier Free plan. Use search_food instead for the primary, always-available search.",
       inputSchema: {
-        q: z.string().min(1).describe("Partial search expression, e.g. 'chic'"),
+        query: z.string().min(1).describe("Partial search expression, e.g. 'chic'"),
         max_results: z.number().int().positive().max(10).optional().default(4),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    safeTool("foods_autocomplete", async ({ q, max_results }) => {
-      const res = await chakudyaClient.get<string[]>("/foods/autocomplete", { q, max_results });
+    safeTool("foods_autocomplete", async ({ query, max_results }) => {
+      const res = await chakudyaClient.get<string[]>("/foods/autocomplete", { q: query, max_results });
       return ok(res.data ?? []);
     })
   );
