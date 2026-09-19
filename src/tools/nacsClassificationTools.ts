@@ -22,18 +22,31 @@ import { ok, safeTool } from "../utils/toolResult.js";
  * inventing a firmer number.
  */
 
-const NACS_DISCLAIMER =
+export const NACS_DISCLAIMER =
   "Classification only, per NACS User's Guide Module 2 cutoffs (source: WHO 1995, Technical Report " +
   "Series 854). Any bilateral pitting edema alone classifies as the most severe category regardless " +
   "of other measures. Not a substitute for a full clinical nutrition assessment.";
 
-type Severity = "severe" | "moderate" | "normal" | "overweight" | "obesity";
+export type Severity = "severe" | "moderate" | "normal" | "overweight" | "obesity";
 
-interface IndicatorResult {
+export interface IndicatorResult {
   indicator: string;
   value: string;
   classification: Severity;
   cutoffApplied: string;
+}
+
+export interface Nacs059mInput {
+  edema?: boolean;
+  muac_mm?: number;
+  whz?: number;
+}
+
+export interface Nacs059mResult {
+  ageGroup: string;
+  indicators: IndicatorResult[];
+  overallAcuteMalnutritionClassification: Severity;
+  note: string;
 }
 
 function worstAcuteClassification(results: IndicatorResult[]): Severity {
@@ -45,6 +58,69 @@ function worstAcuteClassification(results: IndicatorResult[]): Severity {
     if (r.classification === "moderate") worst = "moderate";
   }
   return worst;
+}
+
+/**
+ * Pure classification shared by the nacs_classify_children_0_59m MCP tool
+ * and by other in-process modules (e.g. under5MalnutritionScreeningTools.ts)
+ * that need the same edema/MUAC/WHZ classification without a second
+ * network/tool round-trip. Behaviour is identical to the tool.
+ */
+export function classifyChildren0to59m({ edema, muac_mm, whz }: Nacs059mInput): Nacs059mResult {
+  if (edema === undefined && muac_mm === undefined && whz === undefined) {
+    throw new Error("Provide at least one of edema, muac_mm, or whz.");
+  }
+
+  const indicators: IndicatorResult[] = [];
+
+  if (edema) {
+    indicators.push({
+      indicator: "bilateral_pitting_edema",
+      value: "present",
+      classification: "severe",
+      cutoffApplied: "Any bilateral pitting edema = SAM (severe acute malnutrition)",
+    });
+  }
+
+  if (muac_mm !== undefined) {
+    let classification: Severity;
+    if (muac_mm < 115) classification = "severe";
+    else if (muac_mm < 125) classification = "moderate";
+    else classification = "normal";
+    indicators.push({
+      indicator: "muac",
+      value: `${muac_mm} mm`,
+      classification,
+      cutoffApplied: "SAM < 115mm, MAM >= 115 to < 125mm, normal >= 125mm",
+    });
+  }
+
+  if (whz !== undefined) {
+    let classification: Severity;
+    if (whz < -3) classification = "severe";
+    else if (whz < -2) classification = "moderate";
+    else if (whz <= 2) classification = "normal";
+    else if (whz <= 3) classification = "overweight";
+    else classification = "obesity";
+    indicators.push({
+      indicator: "whz",
+      value: whz.toString(),
+      classification,
+      cutoffApplied:
+        "SAM < -3, MAM >= -3 to < -2, normal >= -2 to <= +2, overweight > +2 to <= +3, obesity > +3",
+    });
+  }
+
+  const overall = worstAcuteClassification(indicators);
+
+  return {
+    ageGroup: "0-59 months",
+    indicators,
+    overallAcuteMalnutritionClassification: overall,
+    note:
+      "Weight loss >5% since last visit is not a listed classification criterion for this age " +
+      "group in the source guide (WHZ/MUAC/edema are used instead).",
+  };
 }
 
 export function registerNacsClassificationTools(server: McpServer): void {
@@ -66,63 +142,8 @@ export function registerNacsClassificationTools(server: McpServer): void {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     safeTool("nacs_classify_children_0_59m", async ({ edema, muac_mm, whz }) => {
-      if (edema === undefined && muac_mm === undefined && whz === undefined) {
-        throw new Error("Provide at least one of edema, muac_mm, or whz.");
-      }
-
-      const indicators: IndicatorResult[] = [];
-
-      if (edema) {
-        indicators.push({
-          indicator: "bilateral_pitting_edema",
-          value: "present",
-          classification: "severe",
-          cutoffApplied: "Any bilateral pitting edema = SAM (severe acute malnutrition)",
-        });
-      }
-
-      if (muac_mm !== undefined) {
-        let classification: Severity;
-        if (muac_mm < 115) classification = "severe";
-        else if (muac_mm < 125) classification = "moderate";
-        else classification = "normal";
-        indicators.push({
-          indicator: "muac",
-          value: `${muac_mm} mm`,
-          classification,
-          cutoffApplied: "SAM < 115mm, MAM >= 115 to < 125mm, normal >= 125mm",
-        });
-      }
-
-      if (whz !== undefined) {
-        let classification: Severity;
-        if (whz < -3) classification = "severe";
-        else if (whz < -2) classification = "moderate";
-        else if (whz <= 2) classification = "normal";
-        else if (whz <= 3) classification = "overweight";
-        else classification = "obesity";
-        indicators.push({
-          indicator: "whz",
-          value: whz.toString(),
-          classification,
-          cutoffApplied:
-            "SAM < -3, MAM >= -3 to < -2, normal >= -2 to <= +2, overweight > +2 to <= +3, obesity > +3",
-        });
-      }
-
-      const overall = worstAcuteClassification(indicators);
-
-      return ok(
-        {
-          ageGroup: "0-59 months",
-          indicators,
-          overallAcuteMalnutritionClassification: overall,
-          note:
-            "Weight loss >5% since last visit is not a listed classification criterion for this age " +
-            "group in the source guide (WHZ/MUAC/edema are used instead).",
-        },
-        { disclaimer: NACS_DISCLAIMER }
-      );
+      const result = classifyChildren0to59m({ edema, muac_mm, whz });
+      return ok(result, { disclaimer: NACS_DISCLAIMER });
     })
   );
 

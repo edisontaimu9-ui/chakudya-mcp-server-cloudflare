@@ -40,7 +40,7 @@ import wfhBoysLms from "../data/who/wfh-boys-lms.json" with { type: "json" };
  * point-in-time z-score).
  */
 
-const DISCLAIMER =
+export const DISCLAIMER =
   "Estimate only, computed from WHO growth reference LMS parameters. A single measurement is not a " +
   "substitute for tracking growth trajectory over time and clinical assessment.";
 
@@ -102,7 +102,7 @@ const LMS_TABLES: Record<string, StandardEntry> = {
   },
 };
 
-const AVAILABLE_STANDARDS = Object.keys(LMS_TABLES);
+export const AVAILABLE_STANDARDS = Object.keys(LMS_TABLES);
 
 /** Binary-search + linear-interpolate LMS parameters for an arbitrary key. Works for densely-indexed
  * (day 0..N, contiguous), sparsely-indexed (month 61..228), and fine-stepped (length 45.0..110.0 by 0.1)
@@ -144,7 +144,7 @@ function normalCdf(z: number): number {
   return prob;
 }
 
-function classify(z: number, standard: string): string {
+export function classify(z: number, standard: string): string {
   // WHO cutoffs are similar across standards but the clinical label — and, for BMI, the exact
   // z-score cutoffs — differ between the 0-5y Child Growth Standards and the 5-19y Reference 2007.
   if (standard === "weight_for_age") {
@@ -194,6 +194,95 @@ function ageDaysFrom(ageDays?: number, ageMonths?: number, ageYears?: number): n
   return null;
 }
 
+export interface WhoGrowthZScoreInput {
+  standard: string;
+  sex: "male" | "female";
+  value: number;
+  age_days?: number;
+  age_months?: number;
+  age_years?: number;
+  length_or_height_cm?: number;
+}
+
+export interface WhoGrowthZScoreResult {
+  standard: string;
+  source_range: string;
+  sex: "male" | "female";
+  age_days: number | null;
+  length_or_height_cm: number | null;
+  value: number;
+  z_score: number;
+  percentile: number;
+  classification: string;
+  lms_parameters: { L: number; M: number; S: number };
+}
+
+export type WhoGrowthZScoreOutcome =
+  | { ok: true; result: WhoGrowthZScoreResult }
+  | { ok: false; error: string };
+
+/**
+ * Pure computation shared by the who_growth_zscore MCP tool and by other
+ * in-process modules (e.g. under5MalnutritionScreeningTools.ts) that need a
+ * WHO growth z-score without a second network/tool round-trip. Behaviour is
+ * identical to the tool — this just returns a discriminated-union result
+ * instead of an MCP content payload so callers can branch on ok/error.
+ */
+export function computeWhoGrowthZScore(input: WhoGrowthZScoreInput): WhoGrowthZScoreOutcome {
+  const { standard, sex, value, age_days, age_months, age_years, length_or_height_cm } = input;
+
+  const entry = LMS_TABLES[standard];
+  if (!entry) {
+    return {
+      ok: false,
+      error: `Standard "${standard}" is not loaded yet. Available: ${AVAILABLE_STANDARDS.join(", ")}.`,
+    };
+  }
+
+  let key: number;
+  let resultAgeDays: number | null = null;
+
+  if (entry.keyKind === "length_cm" || entry.keyKind === "height_cm") {
+    if (length_or_height_cm === undefined) {
+      return { ok: false, error: `${standard} requires length_or_height_cm, not an age.` };
+    }
+    key = length_or_height_cm;
+  } else {
+    const ageDays = ageDaysFrom(age_days, age_months, age_years);
+    if (ageDays === null) {
+      return { ok: false, error: "Provide age_days, age_months, or age_years." };
+    }
+    resultAgeDays = ageDays;
+    key = entry.keyKind === "age_month" ? ageDays / 30.4375 : ageDays;
+  }
+
+  const rows = entry[sex];
+  const lms = interpolateLms(rows, key);
+  if (!lms) {
+    return { ok: false, error: `Input is outside this standard's range (${entry.rangeLabel}).` };
+  }
+
+  const zScore = lmsZScore(value, lms.L, lms.M, lms.S);
+  const percentile = normalCdf(zScore) * 100;
+
+  return {
+    ok: true,
+    result: {
+      standard,
+      source_range: entry.rangeLabel,
+      sex,
+      age_days: resultAgeDays !== null ? Math.round(resultAgeDays * 10) / 10 : null,
+      length_or_height_cm:
+        entry.keyKind === "length_cm" || entry.keyKind === "height_cm" ? length_or_height_cm ?? null : null,
+      value,
+      z_score: Math.round(zScore * 100) / 100,
+      percentile: Math.round(percentile * 10) / 10,
+      classification: classify(zScore, standard),
+      lms_parameters: { L: lms.L, M: lms.M, S: lms.S },
+    },
+  };
+}
+
 export function registerWhoGrowthTools(server: McpServer) {
   server.registerTool(
     "who_growth_zscore",
@@ -234,70 +323,19 @@ export function registerWhoGrowthTools(server: McpServer) {
     safeTool(
       "who_growth_zscore",
       async ({ standard, sex, value, age_days, age_months, age_years, length_or_height_cm }) => {
-        const entry = LMS_TABLES[standard];
-        if (!entry) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Standard "${standard}" is not loaded yet. Available: ${AVAILABLE_STANDARDS.join(", ")}.`,
-              },
-            ],
-            isError: true as const,
-          };
-        }
-
-        let key: number;
-        let resultAgeDays: number | null = null;
-
-        if (entry.keyKind === "length_cm" || entry.keyKind === "height_cm") {
-          if (length_or_height_cm === undefined) {
-            return {
-              content: [
-                { type: "text" as const, text: `${standard} requires length_or_height_cm, not an age.` },
-              ],
-              isError: true as const,
-            };
-          }
-          key = length_or_height_cm;
-        } else {
-          const ageDays = ageDaysFrom(age_days, age_months, age_years);
-          if (ageDays === null) {
-            return {
-              content: [{ type: "text" as const, text: "Provide age_days, age_months, or age_years." }],
-              isError: true as const,
-            };
-          }
-          resultAgeDays = ageDays;
-          key = entry.keyKind === "age_month" ? ageDays / 30.4375 : ageDays;
-        }
-
-        const rows = entry[sex];
-        const lms = interpolateLms(rows, key);
-        if (!lms) {
-          return {
-            content: [{ type: "text" as const, text: `Input is outside this standard's range (${entry.rangeLabel}).` }],
-            isError: true as const,
-          };
-        }
-
-        const zScore = lmsZScore(value, lms.L, lms.M, lms.S);
-        const percentile = normalCdf(zScore) * 100;
-
-        return ok({
+        const outcome = computeWhoGrowthZScore({
           standard,
-          source_range: entry.rangeLabel,
           sex,
-          age_days: resultAgeDays !== null ? Math.round(resultAgeDays * 10) / 10 : null,
-          length_or_height_cm:
-            entry.keyKind === "length_cm" || entry.keyKind === "height_cm" ? length_or_height_cm : null,
           value,
-          z_score: Math.round(zScore * 100) / 100,
-          percentile: Math.round(percentile * 10) / 10,
-          classification: classify(zScore, standard),
-          lms_parameters: { L: lms.L, M: lms.M, S: lms.S },
-          disclaimer: DISCLAIMER,
+          age_days,
+          age_months,
+          age_years,
+          length_or_height_cm,
         });
+        if (!outcome.ok) {
+          return { content: [{ type: "text" as const, text: outcome.error }], isError: true as const };
+        }
+        return ok({ ...outcome.result, disclaimer: DISCLAIMER });
       }
     )
   );
