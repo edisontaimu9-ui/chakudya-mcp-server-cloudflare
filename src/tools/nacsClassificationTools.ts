@@ -123,6 +123,83 @@ export function classifyChildren0to59m({ edema, muac_mm, whz }: Nacs059mInput): 
   };
 }
 
+export interface NacsPregnantPostpartumInput {
+  edema?: boolean;
+  muac_mm?: number;
+  moderate_muac_upper_mm?: 220 | 230;
+  confirmed_weight_loss_over_10_percent?: boolean;
+}
+
+export interface NacsPregnantPostpartumResult {
+  population: "pregnant/postpartum women";
+  indicators: IndicatorResult[];
+  overallMalnutritionClassification: Severity;
+  note: string;
+}
+
+/**
+ * Pure classification shared by the nacs_classify_pregnant_postpartum MCP
+ * tool and by other in-process modules (e.g.
+ * pregnantPostpartumScreeningTools.ts) that need the same edema/MUAC/
+ * weight-loss classification without a second network/tool round-trip.
+ * Behaviour is identical to the tool.
+ */
+export function classifyPregnantPostpartum({
+  edema,
+  muac_mm,
+  moderate_muac_upper_mm,
+  confirmed_weight_loss_over_10_percent,
+}: NacsPregnantPostpartumInput): NacsPregnantPostpartumResult {
+  if (edema === undefined && muac_mm === undefined && confirmed_weight_loss_over_10_percent === undefined) {
+    throw new Error("Provide at least one of edema, muac_mm, or confirmed_weight_loss_over_10_percent.");
+  }
+
+  const upper = moderate_muac_upper_mm ?? 220;
+  const indicators: IndicatorResult[] = [];
+
+  if (edema) {
+    indicators.push({
+      indicator: "bilateral_pitting_edema",
+      value: "present",
+      classification: "severe",
+      cutoffApplied: "Any bilateral pitting edema = severe malnutrition",
+    });
+  }
+
+  if (confirmed_weight_loss_over_10_percent) {
+    indicators.push({
+      indicator: "weight_loss",
+      value: ">10% since last visit",
+      classification: "severe",
+      cutoffApplied: "Confirmed unintentional weight loss >10% since last visit = severe malnutrition",
+    });
+  }
+
+  if (muac_mm !== undefined) {
+    let classification: Severity;
+    if (muac_mm < 190) classification = "severe";
+    else if (muac_mm < upper) classification = "moderate";
+    else classification = "normal";
+    indicators.push({
+      indicator: "muac",
+      value: `${muac_mm} mm`,
+      classification,
+      cutoffApplied: `severe < 190mm, moderate >= 190 to < ${upper}mm, normal >= ${upper}mm (country-specific MAM upper cutoff)`,
+    });
+  }
+
+  const overall = worstAcuteClassification(indicators);
+
+  return {
+    population: "pregnant/postpartum women",
+    indicators,
+    overallMalnutritionClassification: overall,
+    note:
+      "WHO has not established a single standard MUAC cutoff for this population; countries may use 220 " +
+      "or 230mm for the moderate/normal boundary — confirm which your program uses.",
+  };
+}
+
 export function registerNacsClassificationTools(server: McpServer): void {
   server.registerTool(
     "nacs_classify_children_0_59m",
@@ -259,63 +336,13 @@ export function registerNacsClassificationTools(server: McpServer): void {
     safeTool(
       "nacs_classify_pregnant_postpartum",
       async ({ edema, muac_mm, moderate_muac_upper_mm, confirmed_weight_loss_over_10_percent }) => {
-        if (
-          edema === undefined &&
-          muac_mm === undefined &&
-          confirmed_weight_loss_over_10_percent === undefined
-        ) {
-          throw new Error(
-            "Provide at least one of edema, muac_mm, or confirmed_weight_loss_over_10_percent."
-          );
-        }
-
-        const upper = moderate_muac_upper_mm ?? 220;
-        const indicators: IndicatorResult[] = [];
-
-        if (edema) {
-          indicators.push({
-            indicator: "bilateral_pitting_edema",
-            value: "present",
-            classification: "severe",
-            cutoffApplied: "Any bilateral pitting edema = severe malnutrition",
-          });
-        }
-
-        if (confirmed_weight_loss_over_10_percent) {
-          indicators.push({
-            indicator: "weight_loss",
-            value: ">10% since last visit",
-            classification: "severe",
-            cutoffApplied: "Confirmed unintentional weight loss >10% since last visit = severe malnutrition",
-          });
-        }
-
-        if (muac_mm !== undefined) {
-          let classification: Severity;
-          if (muac_mm < 190) classification = "severe";
-          else if (muac_mm < upper) classification = "moderate";
-          else classification = "normal";
-          indicators.push({
-            indicator: "muac",
-            value: `${muac_mm} mm`,
-            classification,
-            cutoffApplied: `severe < 190mm, moderate >= 190 to < ${upper}mm, normal >= ${upper}mm (country-specific MAM upper cutoff)`,
-          });
-        }
-
-        const overall = worstAcuteClassification(indicators);
-
-        return ok(
-          {
-            population: "pregnant/postpartum women",
-            indicators,
-            overallMalnutritionClassification: overall,
-            note:
-              "WHO has not established a single standard MUAC cutoff for this population; countries may " +
-              "use 220 or 230mm for the moderate/normal boundary — confirm which your program uses.",
-          },
-          { disclaimer: NACS_DISCLAIMER }
-        );
+        const result = classifyPregnantPostpartum({
+          edema,
+          muac_mm,
+          moderate_muac_upper_mm,
+          confirmed_weight_loss_over_10_percent,
+        });
+        return ok(result, { disclaimer: NACS_DISCLAIMER });
       }
     )
   );

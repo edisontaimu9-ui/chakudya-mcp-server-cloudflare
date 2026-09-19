@@ -33,6 +33,7 @@ import { registerDriApiTools } from "../tools/driApiTools.js";
 import { registerFoodComparisonTools } from "../tools/foodComparisonTools.js";
 import { registerDrugInteractionGlycaemicTools } from "../tools/drugInteractionGlycaemicTools.js";
 import { registerUnder5MalnutritionScreeningTools } from "../tools/under5MalnutritionScreeningTools.js";
+import { registerPregnantPostpartumScreeningTools } from "../tools/pregnantPostpartumScreeningTools.js";
 
 /**
  * Builds a new McpServer instance with every Chakudya tool registered.
@@ -82,6 +83,7 @@ export function createChakudyaMcpServer(): McpServer {
   registerFoodComparisonTools(server);
   registerDrugInteractionGlycaemicTools(server);
   registerUnder5MalnutritionScreeningTools(server);
+  registerPregnantPostpartumScreeningTools(server);
 
   return server;
 }
