@@ -49,7 +49,7 @@ export interface Nacs059mResult {
   note: string;
 }
 
-function worstAcuteClassification(results: IndicatorResult[]): Severity {
+export function worstAcuteClassification(results: IndicatorResult[]): Severity {
   // Only severe/moderate/normal compete for "worst" on the acute-malnutrition axis;
   // overweight/obesity are reported per-indicator but don't override a severe/moderate finding.
   let worst: "moderate" | "normal" = "normal";
@@ -200,6 +200,184 @@ export function classifyPregnantPostpartum({
   };
 }
 
+export interface Nacs517yInput {
+  age_years?: number;
+  edema?: boolean;
+  muac_mm?: number;
+  bmi_for_age_z?: number;
+}
+
+export interface Nacs517yResult {
+  ageGroup: string;
+  indicators: IndicatorResult[];
+  overallMalnutritionClassification: Severity;
+  note: string;
+}
+
+/** Age-banded NACS MUAC cutoffs for 5-17 years (mm). Exported so orchestration modules and tests share one table. */
+export function nacsMuacBand5to17y(ageYears: number): { severe: number; moderate: number; label: string } {
+  if (ageYears < 10) return { severe: 135, moderate: 145, label: "5-9 years" };
+  if (ageYears < 15) return { severe: 160, moderate: 185, label: "10-14 years" };
+  return { severe: 185, moderate: 220, label: "15-17 years" };
+}
+
+/**
+ * Pure classification shared by the nacs_classify_children_5_17y MCP tool
+ * and by other in-process modules (e.g. schoolAgeScreeningTools.ts) that
+ * need the same edema/MUAC/BMI-for-age classification without a second
+ * network/tool round-trip. Behaviour is identical to the tool.
+ */
+export function classifyChildren5to17y({ age_years, edema, muac_mm, bmi_for_age_z }: Nacs517yInput): Nacs517yResult {
+  if (edema === undefined && muac_mm === undefined && bmi_for_age_z === undefined) {
+    throw new Error("Provide at least one of edema, muac_mm, or bmi_for_age_z.");
+  }
+  if (muac_mm !== undefined && age_years === undefined) {
+    throw new Error("age_years is required when muac_mm is supplied, to select the correct MUAC band.");
+  }
+
+  const indicators: IndicatorResult[] = [];
+
+  if (edema) {
+    indicators.push({
+      indicator: "bilateral_pitting_edema",
+      value: "present",
+      classification: "severe",
+      cutoffApplied: "Any bilateral pitting edema = severe malnutrition",
+    });
+  }
+
+  if (muac_mm !== undefined && age_years !== undefined) {
+    const band = nacsMuacBand5to17y(age_years);
+
+    let classification: Severity;
+    if (muac_mm < band.severe) classification = "severe";
+    else if (muac_mm < band.moderate) classification = "moderate";
+    else classification = "normal";
+
+    indicators.push({
+      indicator: "muac",
+      value: `${muac_mm} mm`,
+      classification,
+      cutoffApplied: `${band.label} band: severe < ${band.severe}mm, moderate >= ${band.severe} to < ${band.moderate}mm, normal >= ${band.moderate}mm`,
+    });
+  }
+
+  if (bmi_for_age_z !== undefined) {
+    let classification: Severity;
+    if (bmi_for_age_z < -3) classification = "severe";
+    else if (bmi_for_age_z < -2) classification = "moderate";
+    else if (bmi_for_age_z <= 1) classification = "normal";
+    else if (bmi_for_age_z <= 2) classification = "overweight";
+    else classification = "obesity";
+    indicators.push({
+      indicator: "bmi_for_age_z",
+      value: bmi_for_age_z.toString(),
+      classification,
+      cutoffApplied:
+        "severe < -3, moderate >= -3 to < -2, normal >= -2 to <= +1, overweight > +1 to <= +2, obesity > +2",
+    });
+  }
+
+  return {
+    ageGroup: "5-17 years",
+    indicators,
+    overallMalnutritionClassification: worstAcuteClassification(indicators),
+    note:
+      "Weight loss >5% since last visit is not a listed classification criterion for this age " +
+      "group in the source guide.",
+  };
+}
+
+export interface NacsAdultInput {
+  edema?: boolean;
+  muac_mm?: number;
+  bmi?: number;
+  confirmed_weight_loss_over_10_percent?: boolean;
+}
+
+export interface NacsAdultResult {
+  population: string;
+  indicators: IndicatorResult[];
+  overallMalnutritionClassification: Severity;
+}
+
+/**
+ * Pure classification shared by the nacs_classify_adult MCP tool and by
+ * other in-process modules (e.g. adultScreeningTools.ts) that need the same
+ * edema/MUAC/BMI/weight-loss classification without a second network/tool
+ * round-trip. Behaviour is identical to the tool.
+ */
+export function classifyAdult({
+  edema,
+  muac_mm,
+  bmi,
+  confirmed_weight_loss_over_10_percent,
+}: NacsAdultInput): NacsAdultResult {
+  if (
+    edema === undefined &&
+    muac_mm === undefined &&
+    bmi === undefined &&
+    confirmed_weight_loss_over_10_percent === undefined
+  ) {
+    throw new Error("Provide at least one of edema, muac_mm, bmi, or confirmed_weight_loss_over_10_percent.");
+  }
+
+  const indicators: IndicatorResult[] = [];
+
+  if (edema) {
+    indicators.push({
+      indicator: "bilateral_pitting_edema",
+      value: "present",
+      classification: "severe",
+      cutoffApplied: "Any bilateral pitting edema = severe malnutrition",
+    });
+  }
+
+  if (confirmed_weight_loss_over_10_percent) {
+    indicators.push({
+      indicator: "weight_loss",
+      value: ">10% since last visit",
+      classification: "severe",
+      cutoffApplied: "Confirmed unintentional weight loss >10% since last visit = severe malnutrition",
+    });
+  }
+
+  if (muac_mm !== undefined) {
+    let classification: Severity;
+    if (muac_mm < 185) classification = "severe";
+    else if (muac_mm < 220) classification = "moderate";
+    else classification = "normal";
+    indicators.push({
+      indicator: "muac",
+      value: `${muac_mm} mm`,
+      classification,
+      cutoffApplied: "severe < 185mm, moderate >= 185 to < 220mm, normal >= 220mm (suggested, not a WHO standard)",
+    });
+  }
+
+  if (bmi !== undefined) {
+    let classification: Severity;
+    if (bmi < 16.0) classification = "severe";
+    else if (bmi < 18.5) classification = "moderate";
+    else if (bmi < 25.0) classification = "normal";
+    else if (bmi < 30.0) classification = "overweight";
+    else classification = "obesity";
+    indicators.push({
+      indicator: "bmi",
+      value: bmi.toString(),
+      classification,
+      cutoffApplied:
+        "severe < 16.0, moderate >= 16.0 to < 18.5, normal >= 18.5 to < 25.0, overweight >= 25.0 to < 30.0, obesity >= 30.0",
+    });
+  }
+
+  return {
+    population: "adults 18+ (non-pregnant/non-postpartum)",
+    indicators,
+    overallMalnutritionClassification: worstAcuteClassification(indicators),
+  };
+}
+
 export function registerNacsClassificationTools(server: McpServer): void {
   server.registerTool(
     "nacs_classify_children_0_59m",
@@ -241,72 +419,8 @@ export function registerNacsClassificationTools(server: McpServer): void {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     safeTool("nacs_classify_children_5_17y", async ({ age_years, edema, muac_mm, bmi_for_age_z }) => {
-      if (edema === undefined && muac_mm === undefined && bmi_for_age_z === undefined) {
-        throw new Error("Provide at least one of edema, muac_mm, or bmi_for_age_z.");
-      }
-      if (muac_mm !== undefined && age_years === undefined) {
-        throw new Error("age_years is required when muac_mm is supplied, to select the correct MUAC band.");
-      }
-
-      const indicators: IndicatorResult[] = [];
-
-      if (edema) {
-        indicators.push({
-          indicator: "bilateral_pitting_edema",
-          value: "present",
-          classification: "severe",
-          cutoffApplied: "Any bilateral pitting edema = severe malnutrition",
-        });
-      }
-
-      if (muac_mm !== undefined && age_years !== undefined) {
-        let band: { severe: number; moderate: number; label: string };
-        if (age_years < 10) band = { severe: 135, moderate: 145, label: "5-9 years" };
-        else if (age_years < 15) band = { severe: 160, moderate: 185, label: "10-14 years" };
-        else band = { severe: 185, moderate: 220, label: "15-17 years" };
-
-        let classification: Severity;
-        if (muac_mm < band.severe) classification = "severe";
-        else if (muac_mm < band.moderate) classification = "moderate";
-        else classification = "normal";
-
-        indicators.push({
-          indicator: "muac",
-          value: `${muac_mm} mm`,
-          classification,
-          cutoffApplied: `${band.label} band: severe < ${band.severe}mm, moderate >= ${band.severe} to < ${band.moderate}mm, normal >= ${band.moderate}mm`,
-        });
-      }
-
-      if (bmi_for_age_z !== undefined) {
-        let classification: Severity;
-        if (bmi_for_age_z < -3) classification = "severe";
-        else if (bmi_for_age_z < -2) classification = "moderate";
-        else if (bmi_for_age_z <= 1) classification = "normal";
-        else if (bmi_for_age_z <= 2) classification = "overweight";
-        else classification = "obesity";
-        indicators.push({
-          indicator: "bmi_for_age_z",
-          value: bmi_for_age_z.toString(),
-          classification,
-          cutoffApplied:
-            "severe < -3, moderate >= -3 to < -2, normal >= -2 to <= +1, overweight > +1 to <= +2, obesity > +2",
-        });
-      }
-
-      const overall = worstAcuteClassification(indicators);
-
-      return ok(
-        {
-          ageGroup: "5-17 years",
-          indicators,
-          overallMalnutritionClassification: overall,
-          note:
-            "Weight loss >5% since last visit is not a listed classification criterion for this age " +
-            "group in the source guide.",
-        },
-        { disclaimer: NACS_DISCLAIMER }
-      );
+      const result = classifyChildren5to17y({ age_years, edema, muac_mm, bmi_for_age_z });
+      return ok(result, { disclaimer: NACS_DISCLAIMER });
     })
   );
 
@@ -371,76 +485,8 @@ export function registerNacsClassificationTools(server: McpServer): void {
     safeTool(
       "nacs_classify_adult",
       async ({ edema, muac_mm, bmi, confirmed_weight_loss_over_10_percent }) => {
-        if (
-          edema === undefined &&
-          muac_mm === undefined &&
-          bmi === undefined &&
-          confirmed_weight_loss_over_10_percent === undefined
-        ) {
-          throw new Error(
-            "Provide at least one of edema, muac_mm, bmi, or confirmed_weight_loss_over_10_percent."
-          );
-        }
-
-        const indicators: IndicatorResult[] = [];
-
-        if (edema) {
-          indicators.push({
-            indicator: "bilateral_pitting_edema",
-            value: "present",
-            classification: "severe",
-            cutoffApplied: "Any bilateral pitting edema = severe malnutrition",
-          });
-        }
-
-        if (confirmed_weight_loss_over_10_percent) {
-          indicators.push({
-            indicator: "weight_loss",
-            value: ">10% since last visit",
-            classification: "severe",
-            cutoffApplied: "Confirmed unintentional weight loss >10% since last visit = severe malnutrition",
-          });
-        }
-
-        if (muac_mm !== undefined) {
-          let classification: Severity;
-          if (muac_mm < 185) classification = "severe";
-          else if (muac_mm < 220) classification = "moderate";
-          else classification = "normal";
-          indicators.push({
-            indicator: "muac",
-            value: `${muac_mm} mm`,
-            classification,
-            cutoffApplied: "severe < 185mm, moderate >= 185 to < 220mm, normal >= 220mm (suggested, not a WHO standard)",
-          });
-        }
-
-        if (bmi !== undefined) {
-          let classification: Severity;
-          if (bmi < 16.0) classification = "severe";
-          else if (bmi < 18.5) classification = "moderate";
-          else if (bmi < 25.0) classification = "normal";
-          else if (bmi < 30.0) classification = "overweight";
-          else classification = "obesity";
-          indicators.push({
-            indicator: "bmi",
-            value: bmi.toString(),
-            classification,
-            cutoffApplied:
-              "severe < 16.0, moderate >= 16.0 to < 18.5, normal >= 18.5 to < 25.0, overweight >= 25.0 to < 30.0, obesity >= 30.0",
-          });
-        }
-
-        const overall = worstAcuteClassification(indicators);
-
-        return ok(
-          {
-            population: "adults 18+ (non-pregnant/non-postpartum)",
-            indicators,
-            overallMalnutritionClassification: overall,
-          },
-          { disclaimer: NACS_DISCLAIMER }
-        );
+        const result = classifyAdult({ edema, muac_mm, bmi, confirmed_weight_loss_over_10_percent });
+        return ok(result, { disclaimer: NACS_DISCLAIMER });
       }
     )
   );

@@ -1,0 +1,456 @@
+import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ok, safeTool } from "../utils/toolResult.js";
+import { classifyAdult, NACS_DISCLAIMER, type NacsAdultResult } from "./nacsClassificationTools.js";
+import {
+  resolveAge,
+  ageSchema,
+  type AgeInput,
+  type ResolvedAge,
+  type DataQualityFlag,
+  type ClinicalFlag,
+  type MeasurementContext,
+} from "./under5MalnutritionScreeningTools.js";
+
+/**
+ * Adult (18+, non-pregnant/non-postpartum) malnutrition screening workflow:
+ * adult men and non-pregnant women, including older adults.
+ *
+ * ORCHESTRATION layer — reuses classifyAdult() from
+ * nacsClassificationTools.ts (NACS User's Guide Module 2: edema, MUAC, BMI,
+ * confirmed >10% weight loss) and adds:
+ *   - BMI calculated from weight + height (unrounded), with data-quality checks
+ *   - the BAPEN 'MUST' (Malnutrition Universal Screening Tool) as an OPTIONAL
+ *     second, separate risk axis — deterministic scoring only
+ *   - a deterministic referral/action ladder
+ * Same three-layer split as the under-5 and pregnant/postpartum modules; see
+ * those files. Layer 3 (a conversational agent such as adultScreening.js in
+ * thanzi-coach-whatsapp) must treat every classification and
+ * recommended_action as authoritative, never recompute/override/soften them,
+ * and never invent measurements.
+ *
+ * Two axes are kept SEPARATE (anthropometric NACS status vs MUST risk)
+ * because they measure different things and can legitimately disagree —
+ * mirroring the under-5 module.
+ *
+ * Older adults (65+): NACS adult cut-offs are NOT age-adjusted, and the
+ * MUAC cut-offs are suggestions rather than a WHO standard. GLIM (see
+ * glim_malnutrition_diagnosis in this server) uses higher BMI thresholds
+ * for people 70 and older. A limitation note says so; classification is not
+ * altered.
+ *
+ * MALAWI / DEPLOYMENT NOTE: referral wording is generic/CMAM-aligned, NOT the
+ * specific Malawi Ministry of Health protocol — see TODO(malawi-protocol).
+ *
+ * Screening/decision-support prototype only — not a diagnostic device.
+ */
+
+const MODULE_DISCLAIMER =
+  "Screening/decision-support tool only. Classification is produced by deterministic NACS rules " +
+  "(edema/MUAC/BMI/confirmed weight loss) and, if supplied, the BAPEN MUST score. This is not a diagnosis and " +
+  "not a substitute for assessment and management by a qualified health worker. Adult MUAC cut-offs are " +
+  "suggestions, not a WHO standard. Referral wording is generic/CMAM-aligned, not the specific Malawi Ministry " +
+  "of Health protocol — see the todo_malawi_protocol field.";
+
+const ADULT_MIN_MONTHS = 18 * 12;
+const OLDER_ADULT_YEARS = 65; // conventional threshold; only triggers a limitation note, never changes a classification
+
+/** Gross data-entry sanity bounds only (unit/typo catching), NOT clinical thresholds. */
+const PLAUSIBILITY_BOUNDS = {
+  weight_kg: { min: 20, max: 300 },
+  height_cm: { min: 100, max: 230 },
+  muac_mm: { min: 100, max: 500 },
+  bmi: { min: 8, max: 80 },
+} as const;
+
+function checkPlausibility(field: keyof typeof PLAUSIBILITY_BOUNDS, value: number | undefined): DataQualityFlag[] {
+  if (value === undefined) return [];
+  const b = PLAUSIBILITY_BOUNDS[field];
+  if (value < b.min || value > b.max) {
+    return [
+      {
+        field,
+        issue: "implausible_value",
+        detail: `${field} = ${value} is outside the plausible data-entry range (${b.min}-${b.max}). Check for a unit or transcription error before using this value.`,
+      },
+    ];
+  }
+  return [];
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// MUST — Malnutrition Universal Screening Tool
+// ─────────────────────────────────────────────────────────────────────────
+
+export type MustWeightLossBand = "lt_5_percent" | "5_to_10_percent" | "gt_10_percent";
+
+export interface MustInput {
+  /** Body mass index, kg/m2 (calculated by the integrated tool from weight + height when not supplied). */
+  bmi: number;
+  /** Unplanned weight loss over the past 3-6 months. */
+  weight_loss_band: MustWeightLossBand;
+  /** Acutely ill AND there has been or is likely to be no nutritional intake for more than 5 days. */
+  acute_disease_no_intake_over_5_days: boolean;
+}
+
+export interface MustResult {
+  responses: MustInput;
+  component_scores: { bmi: number; weight_loss: number; acute_disease: number };
+  total_score: number;
+  risk_category: "low" | "medium" | "high";
+  explanation: string;
+  source: string;
+  age_applicability: string;
+}
+
+/**
+ * MUST (BAPEN). Source: Elia M (ed). The 'MUST' Report. BAPEN, 2003;
+ * validation: Stratton RJ, Hackston A, Longmore D, et al. Br J Nutr.
+ * 2004;92(5):799-808.
+ *   Step 1 BMI:          > 20 = 0;  18.5-20 = 1;  < 18.5 = 2
+ *   Step 2 weight loss (past 3-6 months): < 5% = 0;  5-10% = 1;  > 10% = 2
+ *   Step 3 acute disease effect: 2 if acutely ill AND no nutritional intake
+ *          (or likely none) for > 5 days, else 0
+ *   Step 4 total: 0 = low risk, 1 = medium risk, >= 2 = high risk
+ * Adults only. The MUAC-based BMI estimate MUST allows when height/weight
+ * cannot be measured is NOT implemented here — BMI must be supplied.
+ */
+export function mustScreen(input: MustInput): MustResult {
+  const bmi = input.bmi > 20 ? 0 : input.bmi >= 18.5 ? 1 : 2;
+  const weightLoss = input.weight_loss_band === "lt_5_percent" ? 0 : input.weight_loss_band === "5_to_10_percent" ? 1 : 2;
+  const acute = input.acute_disease_no_intake_over_5_days ? 2 : 0;
+  const total = bmi + weightLoss + acute;
+  const risk: MustResult["risk_category"] = total >= 2 ? "high" : total === 1 ? "medium" : "low";
+  return {
+    responses: input,
+    component_scores: { bmi, weight_loss: weightLoss, acute_disease: acute },
+    total_score: total,
+    risk_category: risk,
+    explanation: `MUST score ${total} (BMI ${bmi}, weight loss ${weightLoss}, acute disease ${acute}) -> ${risk} risk (0 = low, 1 = medium, >= 2 = high).`,
+    source: "BAPEN 'MUST' (Elia 2003); Stratton RJ et al. Br J Nutr. 2004;92(5):799-808.",
+    age_applicability: "adults (18+)",
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Integrated adult screen
+// ─────────────────────────────────────────────────────────────────────────
+
+export interface AdultIntegratedScreenInput {
+  sex: "male" | "female";
+  age: AgeInput;
+  weight_kg?: number;
+  height_cm?: number;
+  /** Alternative to weight_kg + height_cm. Ignored (and flagged) if both weight and height are given. */
+  bmi?: number;
+  muac_mm?: number;
+  edema?: boolean;
+  confirmed_weight_loss_over_10_percent?: boolean;
+  /** Set true for a pregnant/postpartum woman — declined; use pregnant_postpartum_integrated_screen. */
+  pregnant_or_postpartum?: boolean;
+  measurement_context?: MeasurementContext;
+  must?: { weight_loss_band: MustWeightLossBand; acute_disease_no_intake_over_5_days: boolean };
+}
+
+export interface AdultIntegratedScreenResult {
+  status: "success";
+  person: { sex: "male" | "female"; age_years: number; age_source: ResolvedAge["source"]; older_adult: boolean };
+  measurement_context: MeasurementContext;
+  measurement_quality: { data_quality_flags: DataQualityFlag[]; missing_measurements: string[] };
+  measurements: { bmi: number | null };
+  nacs_classification: NacsAdultResult | null;
+  nacs_classification_skipped_reason: string | null;
+  screening: { tools_administered: string[]; tools_skipped: Array<{ tool: string; reason: string }>; must: MustResult | null };
+  risk: { anthropometric_malnutrition_status: string; screening_risk_summary: string };
+  clinical_flags: ClinicalFlag[];
+  recommended_action: { urgency: "urgent" | "priority" | "routine"; action: string };
+  referral: { pathway: string; todo_malawi_protocol: string };
+  explanation: string;
+  limitations: string[];
+}
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+export function integratedAdultScreen(
+  input: AdultIntegratedScreenInput
+): { ok: true; result: AdultIntegratedScreenResult } | { ok: false; error: string } {
+  const context = input.measurement_context ?? "community";
+
+  if (input.pregnant_or_postpartum) {
+    return {
+      ok: false,
+      error: "This tool is for non-pregnant, non-postpartum adults. Use pregnant_postpartum_integrated_screen instead.",
+    };
+  }
+
+  const ageOutcome = resolveAge(input.age);
+  if (!ageOutcome.ok) return { ok: false, error: ageOutcome.error };
+  const { ageMonths, source: ageSource } = ageOutcome.age;
+  if (ageMonths < ADULT_MIN_MONTHS) {
+    return {
+      ok: false,
+      error:
+        `Age (${round1(ageMonths / 12)} years) is below the 18-year lower bound of this module. ` +
+        "Use school_age_integrated_screen for 5-17 years, or under5_integrated_screen for 0-59 months.",
+    };
+  }
+  const ageYears = ageMonths / 12;
+  const olderAdult = ageYears >= OLDER_ADULT_YEARS;
+
+  const { weight_kg, height_cm, muac_mm, edema, confirmed_weight_loss_over_10_percent } = input;
+  const flags: DataQualityFlag[] = [
+    ...checkPlausibility("weight_kg", weight_kg),
+    ...checkPlausibility("height_cm", height_cm),
+    ...checkPlausibility("muac_mm", muac_mm),
+  ];
+
+  // ── BMI: weight + height take precedence over a pre-computed BMI ──
+  let bmi: number | undefined;
+  const hasWeightHeight = weight_kg !== undefined && height_cm !== undefined;
+  if (hasWeightHeight) {
+    const m = height_cm / 100;
+    bmi = weight_kg / (m * m); // unrounded on purpose: rounding first can flip a borderline result
+    if (input.bmi !== undefined) {
+      flags.push({
+        field: "bmi",
+        issue: "ignored",
+        detail: "bmi was ignored because weight_kg and height_cm were both provided; BMI was calculated from those instead.",
+      });
+    }
+  } else if (input.bmi !== undefined) {
+    bmi = input.bmi;
+  }
+  if (bmi !== undefined) {
+    if (!(bmi > 0 && Number.isFinite(bmi))) return { ok: false, error: "BMI is not a positive number — check weight_kg / height_cm / bmi." };
+    flags.push(...checkPlausibility("bmi", bmi));
+  }
+
+  const missing: string[] = [];
+  if (bmi === undefined) missing.push(weight_kg === undefined && height_cm === undefined ? "weight_kg + height_cm (or bmi)" : weight_kg === undefined ? "weight_kg" : "height_cm");
+  if (muac_mm === undefined) missing.push("muac_mm");
+  if (edema === undefined) missing.push("edema");
+  if (confirmed_weight_loss_over_10_percent === undefined) missing.push("confirmed_weight_loss_over_10_percent");
+
+  // ── NACS adult classification (reused engine). BMI is passed unrounded. ──
+  const nacsHasInput =
+    edema !== undefined || muac_mm !== undefined || bmi !== undefined || confirmed_weight_loss_over_10_percent !== undefined;
+  const nacs: NacsAdultResult | null = nacsHasInput
+    ? classifyAdult({ edema, muac_mm, bmi, confirmed_weight_loss_over_10_percent })
+    : null;
+  // classifyAdult echoes BMI via toString(); show a tidy 1-decimal value to the reader instead of 22.857142857142858.
+  if (nacs) {
+    for (const ind of nacs.indicators) if (ind.indicator === "bmi" && bmi !== undefined) ind.value = String(round1(bmi));
+  }
+  const nacsSkipped = nacs
+    ? null
+    : "No measurement was provided (need MUAC, oedema, confirmed weight loss, or weight + height / BMI).";
+  const classifiable = nacs !== null && nacs.indicators.length > 0;
+
+  // ── optional MUST ──
+  const toolsAdministered: string[] = [];
+  const toolsSkipped: Array<{ tool: string; reason: string }> = [];
+  let must: MustResult | null = null;
+  if (!input.must) {
+    toolsSkipped.push({ tool: "must", reason: "Not administered: no responses were provided." });
+  } else if (bmi === undefined) {
+    toolsSkipped.push({ tool: "must", reason: "Not administered: MUST needs a BMI (weight + height, or bmi) and none was provided." });
+  } else {
+    must = mustScreen({ bmi, ...input.must });
+    toolsAdministered.push("must");
+  }
+  const mustRisk = must !== null && must.risk_category !== "low";
+
+  const limitations: string[] = [
+    "This is a screening/decision-support prototype, not a diagnostic device. All findings should be confirmed and acted on by a qualified health worker.",
+    "NACS adult MUAC cut-offs are suggestions based on current practice, not a WHO standard, and the cut-offs are not adjusted for age, sex, or oedema-free weight.",
+    "Referral pathway wording is generic/CMAM-aligned; it must be replaced with the current Malawi Ministry of Health protocol before real-world deployment — see referral.todo_malawi_protocol.",
+  ];
+  if (olderAdult) {
+    limitations.push(
+      `Person is ${OLDER_ADULT_YEARS}+ years: NACS adult BMI/MUAC cut-offs are not age-adjusted and can under-detect malnutrition in older adults. ` +
+        "GLIM (glim_malnutrition_diagnosis) uses higher BMI thresholds from 70 years; consider it alongside this screen."
+    );
+  }
+  if (ageYears < 19) {
+    limitations.push(
+      "Age 18 to under 19: NACS adult cut-offs are applied (NACS groups 18+ as adults). bmi_for_age_classify (WHO 2007, to 19 years) can be used as a cross-check."
+    );
+  }
+  if (must && context === "nutrition_rehabilitation") {
+    limitations.push("MUST is a general adult screening tool; in a nutrition rehabilitation setting treat anthropometric classification as primary.");
+  }
+
+  // ── clinical flags ──
+  const clinicalFlags: ClinicalFlag[] = [];
+  for (const dq of flags) clinicalFlags.push({ flag: `data_quality:${dq.issue}`, detail: dq.detail });
+  if (nacs) {
+    for (const ind of nacs.indicators) {
+      if (ind.classification !== "normal") {
+        clinicalFlags.push({ flag: `nacs_${ind.indicator}:${ind.classification}`, detail: `${ind.indicator} = ${ind.value} -> ${ind.classification} (${ind.cutoffApplied}).` });
+      }
+    }
+  }
+  for (const m of missing) clinicalFlags.push({ flag: `missing_measurement:${m}`, detail: `${m} was not provided — not invented or substituted.` });
+  if (mustRisk && must) clinicalFlags.push({ flag: `screening_risk:must:${must.risk_category}`, detail: "must flagged nutrition risk." });
+  if (olderAdult) clinicalFlags.push({ flag: "older_adult", detail: `Age ${round1(ageYears)} years: see limitations on age-adjustment of adult cut-offs.` });
+
+  // ── risk axes + action ladder (deterministic; most severe wins) ──
+  // TODO(malawi-protocol): replace this generic, CMAM-aligned ladder with the
+  // current Malawi Ministry of Health referral protocol for adults (facility
+  // types, follow-up intervals, commodity guidance) before real-world use.
+  const anthropometricStatus = classifiable && nacs ? nacs.overallMalnutritionClassification : "not_classified_insufficient_data";
+  const hasOverweight = nacs?.indicators.some((i) => i.classification === "overweight" || i.classification === "obesity") ?? false;
+
+  let urgency: AdultIntegratedScreenResult["recommended_action"]["urgency"];
+  let action: string;
+  if (anthropometricStatus === "severe") {
+    urgency = "urgent";
+    action =
+      "Urgent referral to a qualified health worker for assessment and management of suspected severe acute malnutrition in this adult, per national protocol — same day if possible.";
+  } else if (anthropometricStatus === "moderate") {
+    urgency = "priority";
+    action = "Refer for nutrition assessment and supplementary feeding / nutrition counselling for suspected moderate acute malnutrition.";
+  } else if (mustRisk && must) {
+    urgency = "priority";
+    action = `Anthropometry does not currently indicate acute malnutrition, but MUST indicates ${must.risk_category} nutrition risk — refer for further dietetic assessment.`;
+  } else if (anthropometricStatus === "not_classified_insufficient_data") {
+    urgency = "routine";
+    action = "Not enough measurements to classify nutritional status. Measure MUAC, check for bilateral pitting oedema, and record weight and height, then screen again.";
+  } else if (hasOverweight) {
+    urgency = "routine";
+    action = "No acute malnutrition identified, but BMI is above the normal range (overweight/obesity) — nutrition and physical-activity counselling and routine follow-up.";
+  } else {
+    urgency = "routine";
+    action = "No acute malnutrition identified on this screening — continue routine nutrition counselling and follow-up.";
+  }
+
+  const screeningSummary = must === null ? "not_administered" : mustRisk ? "risk_flagged_by_at_least_one_tool" : "no_risk_flagged";
+
+  const parts: string[] = [`Adult: ${round1(ageYears)} years, ${input.sex}.`];
+  if (nacs) {
+    for (const ind of nacs.indicators) parts.push(`${ind.indicator} = ${ind.value} -> ${ind.classification} (${ind.cutoffApplied}).`);
+    if (nacs.indicators.length > 0) parts.push(`Overall NACS acute-malnutrition classification: ${nacs.overallMalnutritionClassification}.`);
+  } else if (nacsSkipped) {
+    parts.push(`NACS classification not computed: ${nacsSkipped}`);
+  }
+  if (must) parts.push(must.explanation);
+  parts.push(`Recommended action (${urgency}): ${action}`);
+
+  return {
+    ok: true,
+    result: {
+      status: "success",
+      person: { sex: input.sex, age_years: round1(ageYears), age_source: ageSource, older_adult: olderAdult },
+      measurement_context: context,
+      measurement_quality: { data_quality_flags: flags, missing_measurements: missing },
+      measurements: { bmi: bmi !== undefined ? round1(bmi) : null },
+      nacs_classification: nacs,
+      nacs_classification_skipped_reason: nacsSkipped,
+      screening: { tools_administered: toolsAdministered, tools_skipped: toolsSkipped, must },
+      risk: { anthropometric_malnutrition_status: anthropometricStatus, screening_risk_summary: screeningSummary },
+      clinical_flags: clinicalFlags,
+      recommended_action: { urgency, action },
+      referral: {
+        pathway: action,
+        todo_malawi_protocol:
+          "TODO: replace with the current Malawi Ministry of Health referral protocol for adults (specific facility types, follow-up intervals, commodity guidance). Not present in this repository, so not invented here.",
+      },
+      explanation: parts.join(" "),
+      limitations,
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// MCP tool registration (Layer 2 — thin wrappers, no clinical logic here)
+// ─────────────────────────────────────────────────────────────────────────
+
+const mustSchema = {
+  weight_loss_band: z
+    .enum(["lt_5_percent", "5_to_10_percent", "gt_10_percent"])
+    .describe("Unplanned weight loss in the past 3-6 months: < 5%, 5-10%, or > 10%"),
+  acute_disease_no_intake_over_5_days: z
+    .boolean()
+    .describe("Acutely ill AND there has been or is likely to be no nutritional intake for more than 5 days"),
+};
+
+export function registerAdultScreeningTools(server: McpServer): void {
+  server.registerTool(
+    "must_screen",
+    {
+      title: "MUST — Malnutrition Universal Screening Tool (adults)",
+      description:
+        "Deterministic BAPEN MUST score for an adult: BMI score (> 20 = 0, 18.5-20 = 1, < 18.5 = 2) + unplanned " +
+        "weight-loss score over 3-6 months (< 5% = 0, 5-10% = 1, > 10% = 2) + acute-disease score (2 if acutely ill " +
+        "with no nutritional intake for > 5 days) -> 0 low, 1 medium, >= 2 high risk. Supply the BMI directly (the " +
+        "MUAC-based BMI estimate is not implemented). For a fuller workflow (NACS classification + referral action) " +
+        "use adult_integrated_screen.",
+      inputSchema: {
+        bmi: z.number().positive().describe("BMI in kg/m^2"),
+        ...mustSchema,
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    safeTool("must_screen", async (args) => ok(mustScreen(args), { disclaimer: MODULE_DISCLAIMER }))
+  );
+
+  server.registerTool(
+    "adult_integrated_screen",
+    {
+      title: "Adult (18+) Integrated Malnutrition Screening",
+      description:
+        "Orchestration tool for malnutrition screening of adults 18 years and older who are NOT pregnant or " +
+        "postpartum — men and non-pregnant women, including older adults (for pregnant/postpartum women use " +
+        "pregnant_postpartum_integrated_screen; for 5-17 years use school_age_integrated_screen; for 0-59 months use " +
+        "under5_integrated_screen). Takes the person's details ONCE and combines NACS classification (bilateral " +
+        "oedema, MUAC, BMI calculated from weight_kg + height_cm, confirmed >10% weight loss) with an optional BAPEN " +
+        "MUST risk score on a SEPARATE axis. Returns per-indicator classifications (including overweight/obesity), " +
+        "an overall NACS status, clinical flags, a deterministic recommended action/referral, an evidence-traceable " +
+        "explanation and limitations. Provide age via age_years, age_months, age_days, or date_of_birth + " +
+        "assessment_date. The AI layer calling this tool MUST treat its output as authoritative and MUST NOT " +
+        "recompute, override, or soften any classification, and MUST NOT invent measurements the caller did not supply.",
+      inputSchema: {
+        sex: z.enum(["male", "female"]),
+        ...ageSchema,
+        weight_kg: z.number().positive().optional(),
+        height_cm: z.number().positive().optional(),
+        bmi: z.number().positive().optional().describe("Only if weight_kg and height_cm are not available"),
+        muac_mm: z.number().positive().optional(),
+        edema: z.boolean().optional().describe("Bilateral pitting oedema present"),
+        confirmed_weight_loss_over_10_percent: z.boolean().optional().describe("Confirmed unintentional weight loss >10% since last visit"),
+        pregnant_or_postpartum: z.boolean().optional().describe("If true the tool declines and points to pregnant_postpartum_integrated_screen"),
+        measurement_context: z
+          .enum(["community", "health_centre", "nutrition_rehabilitation", "hospital"])
+          .optional()
+          .describe("Defaults to community"),
+        must: z.object(mustSchema).optional().describe("Omit to skip MUST. BMI is taken from weight_kg + height_cm (or bmi)."),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    safeTool("adult_integrated_screen", async (args) => {
+      const outcome = integratedAdultScreen({
+        sex: args.sex,
+        age: {
+          age_days: args.age_days,
+          age_months: args.age_months,
+          age_years: args.age_years,
+          date_of_birth: args.date_of_birth,
+          assessment_date: args.assessment_date,
+        },
+        weight_kg: args.weight_kg,
+        height_cm: args.height_cm,
+        bmi: args.bmi,
+        muac_mm: args.muac_mm,
+        edema: args.edema,
+        confirmed_weight_loss_over_10_percent: args.confirmed_weight_loss_over_10_percent,
+        pregnant_or_postpartum: args.pregnant_or_postpartum,
+        measurement_context: args.measurement_context,
+        must: args.must,
+      });
+      if (!outcome.ok) {
+        return { content: [{ type: "text" as const, text: outcome.error }], isError: true as const };
+      }
+      return ok(outcome.result, { disclaimer: MODULE_DISCLAIMER, nacs_disclaimer: NACS_DISCLAIMER });
+    })
+  );
+}

@@ -266,7 +266,7 @@ export function assessUnder5Anthropometry(
   if (!ageInScope) {
     return {
       ok: false,
-      error: `Age (${Math.round(ageMonths)} months) is outside the 0-59 month scope of this module. This tool set does not cover children 5 years and older.`,
+      error: `Age (${Math.round(ageMonths)} months) is outside the 0-59 month scope of this module. For ages 5-17 years use school_age_integrated_screen; for adults (18+) use adult_integrated_screen (pregnant/postpartum women: pregnant_postpartum_integrated_screen).`,
     };
   }
 
@@ -1071,7 +1071,7 @@ export function integratedUnder5Screen(
 // above; no clinical logic lives in this section)
 // ─────────────────────────────────────────────────────────────────────────
 
-const ageSchema = {
+export const ageSchema = {
   age_days: z.number().nonnegative().optional(),
   age_months: z.number().nonnegative().optional(),
   age_years: z.number().nonnegative().optional(),
@@ -1079,28 +1079,28 @@ const ageSchema = {
   assessment_date: z.string().optional().describe("ISO date YYYY-MM-DD — required alongside date_of_birth"),
 };
 
-const strongkidsSchema = {
+export const strongkidsSchema = {
   clinical_assessment_poor_nutritional_status: z.boolean().describe("Subjective clinical judgement: reduced fat/muscle mass and/or sunken face"),
   high_risk_disease: z.boolean().describe("Presence of an underlying disease with a known high risk of malnutrition"),
   reduced_intake_or_losses: z.boolean().describe("Diarrhoea >=5/day and/or vomiting >=3/day recently, reduced intake before admission, existing dietitian-advised intervention, or intake reduced by pain"),
   weight_loss_or_poor_gain: z.boolean().describe("Weight loss or poor weight gain during the last weeks/months"),
 };
 
-const pnstSchema = {
+export const pnstSchema = {
   recent_weight_loss_or_failure_to_gain: z.boolean(),
   reduced_intake_recent_weeks: z.boolean(),
   looks_underweight: z.boolean(),
   looks_thin: z.boolean(),
 };
 
-const pymsSchema = {
+export const pymsSchema = {
   bmi_band: z.enum(["gt_9th_centile", "2nd_to_9th_centile", "lt_2nd_centile"]),
   weight_loss_band: z.enum(["none", "uncertain_or_mild", "obvious"]),
   intake_band: z.enum(["no_change", "decreased_more_than_half", "little_or_none_last_week"]),
   prognosis_band: z.enum(["none_expected", "probable_decrease", "no_or_minimal_intake_expected"]),
 };
 
-const stampSchema = {
+export const stampSchema = {
   diagnosis_band: z.enum(["no_nutritional_implications", "possible_nutritional_implications", "definite_nutritional_implications"]),
   intake_band: z.enum(["no_change_good", "recently_decreased_or_poor", "none"]),
   centile_gap_band: z.enum(["0_to_1_centile_space", "2_centile_spaces", "3_or_more_centile_spaces_or_below_2nd_weight_centile"]),

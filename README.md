@@ -51,6 +51,35 @@ Non-secret config (`CHAKUDYA_API_BASE_URL`, `MCP_ALLOWED_ORIGINS`,
 `MCP_RATE_LIMIT_PER_MIN`) is set in `wrangler.jsonc` under `vars` — edit that
 file directly rather than using `wrangler secret put` for those.
 
+## Malnutrition screening tools (by population)
+
+Each population has one orchestration tool that takes the person's details
+once, classifies deterministically, and returns a recommended action. The AI
+layer calling them must treat the output as authoritative.
+
+| Population | Tool | What it combines |
+|---|---|---|
+| 0–59 months | `under5_integrated_screen` | WHO growth z-scores, NACS (oedema, MUAC, WHZ), optional STRONGkids/PNST/PYMS/STAMP |
+| 5–17 years | `school_age_integrated_screen` | BMI-for-age (WHO 2007, see below), NACS age-banded MUAC + oedema, optional STRONGkids |
+| Adults 18+ (not pregnant/postpartum) | `adult_integrated_screen` | NACS (oedema, MUAC, BMI from weight+height, confirmed >10% weight loss), optional MUST on a separate axis |
+| Pregnant / postpartum women | `pregnant_postpartum_integrated_screen` | NACS maternal cut-offs |
+
+Supporting tools: `bmi_for_age_classify` (thin wrapper over the Chakudya API's
+`/bmi-for-age/classify`, 5y 1m – 19y 0m), `must_screen` (BAPEN MUST score),
+`nacs_classify_*`, `who_growth_zscore`.
+
+**BMI-for-age and the Chakudya API.** `school_age_integrated_screen` and
+`bmi_for_age_classify` call `GET /bmi-for-age/classify` on the Chakudya API
+(WHO 2007 table as printed in Malawi MoH *Eat Well to Live Well*, 2021, Annex 2)
+through the same `CHAKUDYA_API` binding / base URL as the other tools. If that
+call fails, the screening tool falls back to the in-process WHO 2007 LMS
+calculation and says so in `limitations`; if the two ever disagree it uses the
+API result and raises a `bmi_for_age_source_disagreement` flag.
+
+Age boundaries follow NACS: under-5 tool is 0–59 months, school-age is
+60 months to under 18 years, adult is 18+. Not assessed for 5–19 years:
+height-for-age and weight-for-age (no reference loaded here).
+
 ## Connecting an MCP client
 
 Same as the Render deployment: point the client at

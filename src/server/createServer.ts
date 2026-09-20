@@ -34,6 +34,9 @@ import { registerFoodComparisonTools } from "../tools/foodComparisonTools.js";
 import { registerDrugInteractionGlycaemicTools } from "../tools/drugInteractionGlycaemicTools.js";
 import { registerUnder5MalnutritionScreeningTools } from "../tools/under5MalnutritionScreeningTools.js";
 import { registerPregnantPostpartumScreeningTools } from "../tools/pregnantPostpartumScreeningTools.js";
+import { registerBmiForAgeTools } from "../tools/bmiForAgeTools.js";
+import { registerSchoolAgeScreeningTools } from "../tools/schoolAgeScreeningTools.js";
+import { registerAdultScreeningTools } from "../tools/adultScreeningTools.js";
 
 /**
  * Builds a new McpServer instance with every Chakudya tool registered.
@@ -84,6 +87,9 @@ export function createChakudyaMcpServer(): McpServer {
   registerDrugInteractionGlycaemicTools(server);
   registerUnder5MalnutritionScreeningTools(server);
   registerPregnantPostpartumScreeningTools(server);
+  registerBmiForAgeTools(server);
+  registerSchoolAgeScreeningTools(server);
+  registerAdultScreeningTools(server);
 
   return server;
 }
