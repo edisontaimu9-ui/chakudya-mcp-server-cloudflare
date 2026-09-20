@@ -114,6 +114,62 @@ const ELDERLY_WEIGHT_EQUATIONS: Record<Sex, ElderlyWeightEquation[]> = {
   ],
 };
 
+// ── Pure estimators ─────────────────────────────────────────────────────────
+// Shared by the two tools below and by other in-process modules
+// (adultScreeningTools.ts), so a weight is always estimated by the same
+// equations. Behaviour of the two tools is unchanged.
+
+export type KneeHeightMacWeightEstimate =
+  | { ok: true; estimated_weight_kg: number; formula: string; see_kg: number; age_band: string }
+  | { ok: false; error: string };
+
+export function estimateWeightFromKneeHeightAndMac(input: {
+  sex: Sex;
+  race: Race;
+  age_years: number;
+  knee_height_cm: number;
+  mid_arm_circumference_cm: number;
+}): KneeHeightMacWeightEstimate {
+  const row = selectKneeHeightMacRow(input.sex, input.race, input.age_years);
+  if (!row) {
+    return {
+      ok: false,
+      error: `No matching equation for sex="${input.sex}", race="${input.race}", age_years=${input.age_years}. Covered age bands: 6-18, 19-59, 60-80 years.`,
+    };
+  }
+  const weightKg = row.kh_coef * input.knee_height_cm + row.mac_coef * input.mid_arm_circumference_cm + row.constant;
+  return {
+    ok: true,
+    estimated_weight_kg: Math.round(weightKg * 100) / 100,
+    formula: row.formula,
+    see_kg: row.see_kg,
+    age_band: row.age_band,
+  };
+}
+
+export interface ElderlyWeightEstimate {
+  estimated_weight_kg: number;
+  formula: string;
+  see_kg: number;
+  inputs_used: Array<"muac" | "cc" | "ssf" | "kh">;
+}
+
+/** Every 65+ equation whose required inputs are all present, most precise (lowest SEE) first. Empty when MUAC + CC are not both given. */
+export function estimateWeightPersons65Plus(
+  sex: Sex,
+  values: { muac?: number; cc?: number; ssf?: number; kh?: number }
+): ElderlyWeightEstimate[] {
+  return ELDERLY_WEIGHT_EQUATIONS[sex]
+    .filter((eq) => eq.requires.every((k) => values[k] !== undefined))
+    .map((eq) => ({
+      estimated_weight_kg: Math.round(eq.compute(values) * 100) / 100,
+      formula: eq.formula,
+      see_kg: eq.see_kg,
+      inputs_used: eq.requires,
+    }))
+    .sort((a, b) => a.see_kg - b.see_kg);
+}
+
 export function registerWeightEstimationTools(server: McpServer) {
   // ── weight_from_knee_height_and_mac ───────────────────────────────────────
   server.registerTool(
@@ -138,24 +194,19 @@ export function registerWeightEstimationTools(server: McpServer) {
     safeTool(
       "weight_from_knee_height_and_mac",
       async ({ sex, race, age_years, knee_height_cm, mid_arm_circumference_cm }) => {
-        const row = selectKneeHeightMacRow(sex, race, age_years);
-        if (!row) {
-          return err(
-            `No matching equation for sex="${sex}", race="${race}", age_years=${age_years}. Covered age bands: 6-18, 19-59, 60-80 years.`
-          );
-        }
-        const weightKg = row.kh_coef * knee_height_cm + row.mac_coef * mid_arm_circumference_cm + row.constant;
+        const est = estimateWeightFromKneeHeightAndMac({ sex, race, age_years, knee_height_cm, mid_arm_circumference_cm });
+        if (!est.ok) return err(est.error);
         return ok(
           {
             sex,
             race,
             age_years,
-            age_band: row.age_band,
+            age_band: est.age_band,
             knee_height_cm,
             mid_arm_circumference_cm,
-            estimated_weight_kg: Math.round(weightKg * 100) / 100,
-            formula: row.formula,
-            see_kg: row.see_kg,
+            estimated_weight_kg: est.estimated_weight_kg,
+            formula: est.formula,
+            see_kg: est.see_kg,
             note: "KH: knee height in cm; MAC: mid-arm circumference in cm; SEE: standard error of the estimate.",
           },
           { disclaimer: WEIGHT_ESTIMATE_DISCLAIMER, citation: "Lee & Nieman" }
@@ -188,21 +239,12 @@ export function registerWeightEstimationTools(server: McpServer) {
     safeTool(
       "weight_estimate_persons_65_and_older",
       async ({ sex, mid_arm_circumference_cm, calf_circumference_cm, subscapular_skinfold_mm, knee_height_cm }) => {
-        const values = {
+        const applicable = estimateWeightPersons65Plus(sex, {
           muac: mid_arm_circumference_cm,
           cc: calf_circumference_cm,
           ssf: subscapular_skinfold_mm,
           kh: knee_height_cm,
-        };
-        const applicable = ELDERLY_WEIGHT_EQUATIONS[sex]
-          .filter((eq) => eq.requires.every((k) => values[k as keyof typeof values] !== undefined))
-          .map((eq) => ({
-            estimated_weight_kg: Math.round(eq.compute(values) * 100) / 100,
-            formula: eq.formula,
-            see_kg: eq.see_kg,
-            inputs_used: eq.requires,
-          }))
-          .sort((a, b) => a.see_kg - b.see_kg);
+        });
 
         if (applicable.length === 0) {
           return err("At minimum, mid_arm_circumference_cm and calf_circumference_cm are required.");

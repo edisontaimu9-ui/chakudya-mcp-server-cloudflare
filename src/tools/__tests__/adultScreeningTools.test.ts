@@ -246,8 +246,8 @@ describe("integratedAdultScreen — height estimated from ulna length or knee he
     expect(r.measurements.height_source).toBe("knee_height");
     expect(r.measurements.height_cm).toBe(162.9);
     expect(r.measurements.height_error_cm).toBe(7.2);
-    expect(r.measurements.bmi_range_from_height_error?.low).toBeLessThan(r.measurements.bmi as number);
-    expect(r.measurements.bmi_range_from_height_error?.high).toBeGreaterThan(r.measurements.bmi as number);
+    expect(r.measurements.bmi_range_from_estimate_error?.low).toBeLessThan(r.measurements.bmi as number);
+    expect(r.measurements.bmi_range_from_estimate_error?.high).toBeGreaterThan(r.measurements.bmi as number);
     expect(r.limitations.join(" ")).toMatch(/\+\/-7\.2 cm/);
   });
 
@@ -293,5 +293,148 @@ describe("integratedAdultScreen — height estimated from ulna length or knee he
   it("ulna age band follows the person's age (>=65 uses the older-adult column)", () => {
     const r = run({ sex: "female", age: { age_years: 70 }, weight_kg: 50, ulna_length_cm: 26.0 });
     expect(r.measurements.height_cm).toBe(165);
+  });
+});
+
+describe("integratedAdultScreen — weight estimated from circumferences / knee height (explicit opt-in)", () => {
+  const woman72 = { sex: "female" as const, age: { age_years: 72 }, height_cm: 160 };
+
+  it("65+: estimates weight from arm + calf, computes BMI from it, and labels everything", () => {
+    const r = run({ ...woman72, muac_mm: 275, calf_circumference_cm: 31.5, estimate_weight_if_missing: true });
+    expect(r.measurements.weight_source).toBe("estimated_65plus");
+    expect(r.measurements.weight_kg).toBe(52.4); // (27.5 x 1.63) + (31.5 x 1.43) - 37.46 = 52.41
+    expect(r.measurements.weight_error_kg).toBe(4.96);
+    expect(r.measurements.bmi).toBe(20.5); // 52.41 / 1.6^2
+    expect(r.measurements.bmi_range_from_estimate_error).toEqual({ low: 18.5, high: 22.4 });
+    const flags = r.clinical_flags.map((f) => f.flag);
+    expect(flags).toContain("bmi_from_estimated_weight");
+    expect(flags).not.toContain("missing_measurement:weight_kg + height_cm (or bmi)");
+    expect(r.limitations.join(" ")).toMatch(/Weight \(52\.4 kg\) was ESTIMATED/);
+    expect(r.limitations.join(" ")).toMatch(/standard error is \+\/-4\.96 kg/);
+    expect(r.explanation).toMatch(/Weight estimated: 52\.4 kg/);
+  });
+
+  it("flags an uncertain BMI category when the weight error straddles a NACS cut-off", () => {
+    // 220 mm arm, 27 cm calf -> about 37.0 kg -> BMI 14.5 (severe), but the +/-4.96 kg band spans about 12.5-16.4, which crosses 16.0
+    const r = run({ ...woman72, muac_mm: 220, calf_circumference_cm: 27, estimate_weight_if_missing: true });
+    expect(r.measurements.bmi).toBeLessThan(16);
+    expect(r.measurements.bmi_range_from_estimate_error?.high).toBeGreaterThan(16);
+    expect(r.clinical_flags.map((f) => f.flag)).toContain("bmi_classification_uncertain");
+  });
+
+  it("does nothing without the explicit opt-in — weight stays missing and no BMI is invented", () => {
+    const r = run({ ...woman72, muac_mm: 275, calf_circumference_cm: 31.5 });
+    expect(r.measurements.weight_source).toBeNull();
+    expect(r.measurements.weight_kg).toBeNull();
+    expect(r.measurements.bmi).toBeNull();
+    expect(r.clinical_flags.map((f) => f.flag)).toContain("missing_measurement:weight_kg");
+  });
+
+  it("a measured weight always wins; the estimation inputs are ignored and flagged", () => {
+    const r = run({ ...woman72, weight_kg: 50, muac_mm: 275, calf_circumference_cm: 31.5, estimate_weight_if_missing: true });
+    expect(r.measurements.weight_source).toBe("measured");
+    expect(r.measurements.weight_kg).toBe(50);
+    expect(r.clinical_flags.map((f) => f.flag)).toContain("data_quality:ignored");
+    expect(r.clinical_flags.map((f) => f.flag)).not.toContain("bmi_from_estimated_weight");
+    expect(r.limitations.join(" ")).not.toMatch(/Weight .* ESTIMATED/);
+  });
+
+  it("under 65 needs knee height + race: 40-year-old man, weight about 65 kg with a +/-11.3 kg error", () => {
+    const r = run({
+      sex: "male",
+      age: { age_years: 40 },
+      height_cm: 170,
+      muac_mm: 300,
+      knee_height_cm: 50,
+      race: "black",
+      estimate_weight_if_missing: true,
+    });
+    expect(r.measurements.weight_source).toBe("estimated_knee_height_mac");
+    expect(r.measurements.weight_kg).toBe(65); // 64.98
+    expect(r.measurements.weight_error_kg).toBe(11.3);
+    // BMI 22.5, band about 18.6-26.4 -> crosses 25
+    expect(r.clinical_flags.map((f) => f.flag)).toContain("bmi_classification_uncertain");
+  });
+
+  it("under 65 with calf but no knee height/race cannot be estimated, and the reason says why", () => {
+    const r = run({ sex: "male", age: { age_years: 40 }, height_cm: 170, muac_mm: 300, calf_circumference_cm: 34, estimate_weight_if_missing: true });
+    expect(r.measurements.weight_kg).toBeNull();
+    const detail = r.clinical_flags.find((f) => f.flag === "data_quality:weight_estimate_unavailable")?.detail;
+    expect(detail).toMatch(/65 and older/);
+  });
+
+  it("knee height without race is not used for weight", () => {
+    const r = run({ sex: "male", age: { age_years: 40 }, height_cm: 170, muac_mm: 300, knee_height_cm: 50, estimate_weight_if_missing: true });
+    expect(r.measurements.weight_kg).toBeNull();
+    expect(r.clinical_flags.find((f) => f.flag === "data_quality:weight_estimate_unavailable")?.detail).toMatch(/race is required/);
+  });
+
+  it("no arm circumference means no estimate", () => {
+    const r = run({ ...woman72, calf_circumference_cm: 31.5, estimate_weight_if_missing: true });
+    expect(r.measurements.weight_kg).toBeNull();
+    expect(r.clinical_flags.find((f) => f.flag === "data_quality:weight_estimate_unavailable")?.detail).toMatch(/muac_mm/);
+  });
+
+  it("age 81+ has no race-specific equation, so knee height alone gives no estimate", () => {
+    const r = run({ sex: "female", age: { age_years: 85 }, height_cm: 155, muac_mm: 250, knee_height_cm: 45, race: "black", estimate_weight_if_missing: true });
+    expect(r.measurements.weight_kg).toBeNull();
+    expect(r.clinical_flags.find((f) => f.flag === "data_quality:weight_estimate_unavailable")?.detail).toMatch(/No matching equation/);
+  });
+
+  it("when both equation sets apply (65-80), the lowest standard error is used and the other is listed", () => {
+    const r = run({
+      sex: "male",
+      age: { age_years: 70 },
+      height_cm: 170,
+      muac_mm: 265,
+      calf_circumference_cm: 31,
+      knee_height_cm: 50,
+      race: "black",
+      estimate_weight_if_missing: true,
+    });
+    expect(r.measurements.weight_source).toBe("estimated_65plus");
+    expect(r.measurements.weight_error_kg).toBe(5.37);
+    expect(r.measurements.weight_estimate?.alternatives.map((a) => a.see_kg)).toEqual([7.04]);
+  });
+
+  it("an implausible estimate (tiny measurements) is refused rather than used", () => {
+    const r = run({ sex: "female", age: { age_years: 70 }, height_cm: 160, muac_mm: 100, calf_circumference_cm: 15, estimate_weight_if_missing: true });
+    expect(r.measurements.weight_kg).toBeNull();
+    expect(r.clinical_flags.find((f) => f.flag === "data_quality:weight_estimate_unavailable")?.detail).toMatch(/plausible range/);
+  });
+
+  it("the estimated-weight BMI feeds MUST and MUST's result is labelled as resting on an estimate", () => {
+    const r = run({
+      ...woman72,
+      muac_mm: 220,
+      calf_circumference_cm: 27,
+      estimate_weight_if_missing: true,
+      must: { weight_loss_band: "lt_5_percent", acute_disease_no_intake_over_5_days: false },
+    });
+    expect(r.screening.must?.component_scores.bmi).toBe(2);
+    expect(r.limitations.join(" ")).toMatch(/MUST BMI score/);
+  });
+
+  it("MUAC/oedema-based findings never depend on the estimate: severe MUAC is severe whatever the estimated BMI says", () => {
+    const r = run({ ...woman72, muac_mm: 170, calf_circumference_cm: 31.5, estimate_weight_if_missing: true });
+    expect(indicator(r, "muac")?.classification).toBe("severe");
+    expect(r.recommended_action.urgency).toBe("urgent");
+  });
+
+  it("both estimated (ulna height + calf weight): range comes from the weight error only, since the ulna table publishes none", () => {
+    const r = run({
+      sex: "female",
+      age: { age_years: 72 },
+      ulna_length_cm: 26.0,
+      muac_mm: 275,
+      calf_circumference_cm: 31.5,
+      estimate_weight_if_missing: true,
+    });
+    expect(r.measurements.height_source).toBe("ulna_length");
+    expect(r.measurements.weight_source).toBe("estimated_65plus");
+    expect(r.measurements.bmi_range_from_estimate_error).toBeDefined();
+    const flags = r.clinical_flags.map((f) => f.flag);
+    expect(flags).toContain("bmi_from_estimated_height");
+    expect(flags).toContain("bmi_from_estimated_weight");
   });
 });

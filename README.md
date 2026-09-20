@@ -89,6 +89,21 @@ sequence, so it is refused rather than used. Weight is never estimated: the
 published equations' standard errors (about 4–14 kg) are too coarse to base a
 BMI on.
 
+**Weight that can't be measured.** With `estimate_weight_if_missing: true` (an
+explicit opt-in — never done implicitly) and no `weight_kg`, `adult_integrated_screen`
+estimates weight from `muac_mm` plus `calf_circumference_cm` (65+, optional
+`subscapular_skinfold_mm` and `knee_height_cm`) and/or `knee_height_cm` + `race`
+(ages up to 80), using the same functions as `weight_estimate_persons_65_and_older`
+and `weight_from_knee_height_and_mac`; the lowest standard error wins and the others
+are listed in `measurements.weight_estimate.alternatives`. The standard errors are
+large (about 4–5 kg for the 65+ set, 7–14.5 kg for the race-specific set), so the
+output labels the weight as estimated (`weight_source`, `weight_error_kg`, a
+`bmi_from_estimated_weight` flag, limitations), gives `bmi_range_from_estimate_error`
+(which also folds in a knee-height stature error), and raises
+`bmi_classification_uncertain` when that range crosses a NACS BMI cut-off. It affects
+BMI and MUST only — never MUAC, oedema or weight-loss findings. It is not available in
+`school_age_integrated_screen`.
+
 Age boundaries follow NACS: under-5 tool is 0–59 months, school-age is
 60 months to under 18 years, adult is 18+. Not assessed for 5–19 years:
 height-for-age and weight-for-age (no reference loaded here).

@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, safeTool } from "../utils/toolResult.js";
 import { classifyAdult, NACS_DISCLAIMER, type NacsAdultResult } from "./nacsClassificationTools.js";
 import { estimateStatureFromUlna, estimateStatureFromKneeHeight } from "./statureEstimationTools.js";
+import { estimateWeightPersons65Plus, estimateWeightFromKneeHeightAndMac } from "./weightEstimationTools.js";
 import {
   resolveAge,
   ageSchema,
@@ -42,10 +43,19 @@ import {
  * (measurements.height_source, a clinical flag, limitations, and — for knee
  * height, whose equations publish an error — the BMI range that error implies).
  * A doubtful source-table cell is refused rather than used silently.
- * Estimated WEIGHT is deliberately NOT supported here: the published weight
- * equations have standard errors of roughly 4-14 kg, too coarse to build a
- * BMI classification on. weight_estimate_persons_65_and_older exists as a
- * standalone tool for a clinician who wants it.
+ *
+ * Weight that cannot be measured: only when the caller sets
+ * estimate_weight_if_missing = true (an explicit opt-in — never done
+ * implicitly) and weight_kg is absent, weight is estimated from muac_mm plus
+ * calf_circumference_cm (65+; optional subscapular_skinfold_mm and
+ * knee_height_cm) and/or knee_height_cm + race (Lee & Nieman, up to 80
+ * years), using the same functions as the weight_* tools; the equation with
+ * the lowest standard error wins. THE ERRORS ARE LARGE (about 4-5 kg for the
+ * 65+ set, 7-14.5 kg for the race-specific knee-height set), so an estimated
+ * weight is always labelled, carries its standard error, and produces a BMI
+ * range; a range that straddles a NACS BMI cut-off raises
+ * bmi_classification_uncertain. It is used for BMI (and so MUST) only —
+ * MUAC, oedema and weight-loss findings never depend on it.
  *
  * Older adults (65+): NACS adult cut-offs are NOT age-adjusted, and the
  * MUAC cut-offs are suggestions rather than a WHO standard. GLIM (see
@@ -169,6 +179,12 @@ export interface AdultIntegratedScreenInput {
   knee_height_cm?: number;
   /** Only used with knee_height_cm — the Lee & Nieman equations are race-specific. */
   race?: "black" | "white";
+  /** Calf circumference, cm — one of the inputs of the 65+ weight equations. Used only when weight is estimated. */
+  calf_circumference_cm?: number;
+  /** Subscapular skinfold, mm — improves the 65+ weight equations. Used only when weight is estimated. */
+  subscapular_skinfold_mm?: number;
+  /** Explicit opt-in: estimate weight (from muac_mm + calf and/or knee_height_cm + race) when weight_kg is absent. */
+  estimate_weight_if_missing?: boolean;
   /** Set true for a pregnant/postpartum woman — declined; use pregnant_postpartum_integrated_screen. */
   pregnant_or_postpartum?: boolean;
   measurement_context?: MeasurementContext;
@@ -182,12 +198,17 @@ export interface AdultIntegratedScreenResult {
   measurement_quality: { data_quality_flags: DataQualityFlag[]; missing_measurements: string[] };
   measurements: {
     bmi: number | null;
+    weight_kg: number | null;
+    weight_source: "measured" | "estimated_65plus" | "estimated_knee_height_mac" | null;
+    /** Standard error of the weight estimate, kg (estimated weight only). */
+    weight_error_kg?: number;
+    weight_estimate?: { formula: string; see_kg: number; alternatives: Array<{ estimated_weight_kg: number; see_kg: number; formula: string }> };
     height_cm: number | null;
     height_source: "measured" | "ulna_length" | "knee_height" | null;
     /** Published error of the height estimate (knee height only), cm. */
     height_error_cm?: number;
-    /** BMI at height +/- height_error_cm (knee height only). */
-    bmi_range_from_height_error?: { low: number; high: number };
+    /** BMI allowing +/- the published error of each estimated input (weight and/or knee-height-based height). */
+    bmi_range_from_estimate_error?: { low: number; high: number };
   };
   nacs_classification: NacsAdultResult | null;
   nacs_classification_skipped_reason: string | null;
@@ -285,17 +306,93 @@ export function integratedAdultScreen(
   const heightEstimated = heightSource === "ulna_length" || heightSource === "knee_height";
   const finalHeightCm = heightCm; // const alias so TypeScript can narrow it below
 
+  // ── Weight: a measured weight always wins; otherwise, only on explicit opt-in, estimate it ──
+  let weightKg: number | undefined = weight_kg;
+  let weightSource: AdultIntegratedScreenResult["measurements"]["weight_source"] = weight_kg !== undefined ? "measured" : null;
+  let weightErrorKg: number | undefined;
+  let weightEstimate: AdultIntegratedScreenResult["measurements"]["weight_estimate"];
+  const calfCm = input.calf_circumference_cm;
+  const ssfMm = input.subscapular_skinfold_mm;
+  if (weight_kg !== undefined) {
+    if (calfCm !== undefined || ssfMm !== undefined) {
+      flags.push({
+        field: "weight_kg",
+        issue: "ignored",
+        detail: "calf_circumference_cm / subscapular_skinfold_mm were ignored because a measured weight_kg was provided.",
+      });
+    }
+  } else if (input.estimate_weight_if_missing) {
+    const muacCm = muac_mm !== undefined ? muac_mm / 10 : undefined;
+    type Candidate = { method: "estimated_65plus" | "estimated_knee_height_mac"; estimated_weight_kg: number; see_kg: number; formula: string };
+    const candidates: Candidate[] = [];
+    const reasons: string[] = [];
+    if (muacCm === undefined) {
+      reasons.push("arm circumference (muac_mm) is required for every weight equation");
+    } else {
+      if (calfCm !== undefined) {
+        if (ageYears >= 65) {
+          for (const e of estimateWeightPersons65Plus(input.sex, { muac: muacCm, cc: calfCm, ssf: ssfMm, kh: input.knee_height_cm })) {
+            candidates.push({ method: "estimated_65plus", estimated_weight_kg: e.estimated_weight_kg, see_kg: e.see_kg, formula: e.formula });
+          }
+        } else {
+          reasons.push("the calf-circumference equations are for people 65 and older");
+        }
+      }
+      if (input.knee_height_cm !== undefined) {
+        if (input.race === undefined) {
+          reasons.push("knee_height_cm was not used for weight because race is required by the Lee & Nieman equations and was not provided");
+        } else {
+          const r = estimateWeightFromKneeHeightAndMac({
+            sex: input.sex,
+            race: input.race,
+            age_years: ageYears,
+            knee_height_cm: input.knee_height_cm,
+            mid_arm_circumference_cm: muacCm,
+          });
+          if (r.ok) candidates.push({ method: "estimated_knee_height_mac", estimated_weight_kg: r.estimated_weight_kg, see_kg: r.see_kg, formula: r.formula });
+          else reasons.push(r.error);
+        }
+      }
+    }
+    candidates.sort((a, b) => a.see_kg - b.see_kg);
+    const best = candidates[0];
+    if (!best) {
+      flags.push({
+        field: "weight_kg",
+        issue: "weight_estimate_unavailable",
+        detail: `Weight could not be estimated: ${reasons.length > 0 ? reasons.join("; ") : "not enough measurements (65+: arm + calf; any adult up to 80: arm + knee height + race)"}.`,
+      });
+    } else if (best.estimated_weight_kg < PLAUSIBILITY_BOUNDS.weight_kg.min || best.estimated_weight_kg > PLAUSIBILITY_BOUNDS.weight_kg.max) {
+      flags.push({
+        field: "weight_kg",
+        issue: "weight_estimate_unavailable",
+        detail: `The estimated weight (${round1(best.estimated_weight_kg)} kg) is outside the plausible range (${PLAUSIBILITY_BOUNDS.weight_kg.min}-${PLAUSIBILITY_BOUNDS.weight_kg.max}); it was not used. Check the circumference measurements and units.`,
+      });
+    } else {
+      weightKg = best.estimated_weight_kg;
+      weightSource = best.method;
+      weightErrorKg = best.see_kg;
+      weightEstimate = {
+        formula: best.formula,
+        see_kg: best.see_kg,
+        alternatives: candidates.slice(1).map((c) => ({ estimated_weight_kg: c.estimated_weight_kg, see_kg: c.see_kg, formula: c.formula })),
+      };
+    }
+  }
+  const weightEstimated = weightSource === "estimated_65plus" || weightSource === "estimated_knee_height_mac";
+  const finalWeightKg = weightKg; // const alias so TypeScript can narrow it below
+
   // ── BMI: weight + height take precedence over a pre-computed BMI ──
   let bmi: number | undefined;
-  const hasWeightHeight = weight_kg !== undefined && finalHeightCm !== undefined;
+  const hasWeightHeight = finalWeightKg !== undefined && finalHeightCm !== undefined;
   if (hasWeightHeight) {
     const m = finalHeightCm / 100;
-    bmi = weight_kg / (m * m); // unrounded on purpose: rounding first can flip a borderline result
+    bmi = finalWeightKg / (m * m); // unrounded on purpose: rounding first can flip a borderline result
     if (input.bmi !== undefined) {
       flags.push({
         field: "bmi",
         issue: "ignored",
-        detail: "bmi was ignored because weight_kg and height were both available; BMI was calculated from those instead.",
+        detail: "bmi was ignored because weight and height were both available; BMI was calculated from those instead.",
       });
     }
   } else if (input.bmi !== undefined) {
@@ -306,19 +403,23 @@ export function integratedAdultScreen(
     flags.push(...checkPlausibility("bmi", bmi));
   }
 
-  // For an estimated height whose equation publishes an error, show the BMI range that error implies and
-  // say so when it straddles a NACS cut-off — the BMI category is then genuinely uncertain.
+  // For estimated inputs whose equations publish an error (weight SEE, knee-height stature error), show the BMI
+  // range those errors imply and say so when it straddles a NACS cut-off — the BMI category is then genuinely uncertain.
   let bmiRange: { low: number; high: number } | undefined;
   let bmiCategoryUncertain = false;
-  if (hasWeightHeight && heightSource === "knee_height" && heightErrorCm !== undefined) {
-    const hi = (heightCm as number) + heightErrorCm;
-    const lo = (heightCm as number) - heightErrorCm;
-    bmiRange = { low: round1((weight_kg as number) / ((hi / 100) ** 2)), high: round1((weight_kg as number) / ((lo / 100) ** 2)) };
-    bmiCategoryUncertain = NACS_ADULT_BMI_CUTOFFS.some((c) => c > (weight_kg as number) / ((hi / 100) ** 2) && c <= (weight_kg as number) / ((lo / 100) ** 2));
+  const weightErr = weightEstimated ? weightErrorKg : undefined;
+  const heightErr = heightSource === "knee_height" ? heightErrorCm : undefined;
+  if (hasWeightHeight && (weightErr !== undefined || heightErr !== undefined)) {
+    const w = finalWeightKg;
+    const h = finalHeightCm;
+    const low = Math.max(w - (weightErr ?? 0), 0.1) / (((h + (heightErr ?? 0)) / 100) ** 2);
+    const high = (w + (weightErr ?? 0)) / (((h - (heightErr ?? 0)) / 100) ** 2);
+    bmiRange = { low: round1(low), high: round1(high) };
+    bmiCategoryUncertain = NACS_ADULT_BMI_CUTOFFS.some((c) => c > low && c <= high);
   }
 
   const missing: string[] = [];
-  if (bmi === undefined) missing.push(weight_kg === undefined && heightCm === undefined ? "weight_kg + height_cm (or bmi)" : weight_kg === undefined ? "weight_kg" : "height_cm");
+  if (bmi === undefined) missing.push(finalWeightKg === undefined && heightCm === undefined ? "weight_kg + height_cm (or bmi)" : finalWeightKg === undefined ? "weight_kg" : "height_cm");
   if (muac_mm === undefined) missing.push("muac_mm");
   if (edema === undefined) missing.push("edema");
   if (confirmed_weight_loss_over_10_percent === undefined) missing.push("confirmed_weight_loss_over_10_percent");
@@ -361,10 +462,18 @@ export function integratedAdultScreen(
     limitations.push(
       `Height (${Math.round(heightCm as number)} cm) was ESTIMATED from ${heightSource === "ulna_length" ? "ulna length" : "knee height"}, not measured. ` +
         "BMI, the NACS BMI classification and the MUST BMI score all inherit that uncertainty; MUAC, oedema and weight-loss findings do not depend on height." +
-        (heightSource === "ulna_length"
-          ? " The ulna table publishes no error figure."
-          : ` The equation's published error is +/-${heightErrorCm} cm${bmiRange ? `, i.e. BMI ${bmiRange.low}-${bmiRange.high} for this weight` : ""}.`)
+        (heightSource === "ulna_length" ? " The ulna table publishes no error figure." : ` The equation's published error is +/-${heightErrorCm} cm.`)
     );
+  }
+  if (weightEstimated) {
+    limitations.push(
+      `Weight (${round1(finalWeightKg as number)} kg) was ESTIMATED (Lee & Nieman, ${weightSource === "estimated_65plus" ? "65+ equations" : "race-specific knee-height and arm-circumference equation"}), not measured. ` +
+        `The equation's standard error is +/-${weightErrorKg} kg, which is large relative to the BMI cut-offs. BMI, the NACS BMI classification and the MUST BMI score ` +
+        "all inherit that uncertainty; MUAC, oedema and weight-loss findings do not depend on weight. Weigh the person as soon as a scale is available."
+    );
+  }
+  if (bmiRange) {
+    limitations.push(`Allowing for the published error of the estimated input(s), BMI could be anywhere from ${bmiRange.low} to ${bmiRange.high}.`);
   }
   if (olderAdult) {
     limitations.push(
@@ -398,10 +507,16 @@ export function integratedAdultScreen(
       detail: `Height estimated from ${heightSource === "ulna_length" ? "ulna length" : "knee height"} (${Math.round(heightCm as number)} cm) — BMI-based findings are estimates.`,
     });
   }
+  if (weightEstimated) {
+    clinicalFlags.push({
+      flag: "bmi_from_estimated_weight",
+      detail: `Weight estimated (${round1(finalWeightKg as number)} kg, standard error +/-${weightErrorKg} kg) — BMI-based findings are estimates.`,
+    });
+  }
   if (bmiCategoryUncertain && bmiRange) {
     clinicalFlags.push({
       flag: "bmi_classification_uncertain",
-      detail: `The BMI range implied by the height estimate's error (${bmiRange.low}-${bmiRange.high}) straddles a NACS BMI cut-off, so the BMI category could differ.`,
+      detail: `The BMI range implied by the published error of the estimated input(s) (${bmiRange.low}-${bmiRange.high}) straddles a NACS BMI cut-off, so the BMI category could differ.`,
     });
   }
   if (mustRisk && must) clinicalFlags.push({ flag: `screening_risk:must:${must.risk_category}`, detail: "must flagged nutrition risk." });
@@ -440,6 +555,7 @@ export function integratedAdultScreen(
   const screeningSummary = must === null ? "not_administered" : mustRisk ? "risk_flagged_by_at_least_one_tool" : "no_risk_flagged";
 
   const parts: string[] = [`Adult: ${round1(ageYears)} years, ${input.sex}.`];
+  if (weightEstimated) parts.push(`Weight estimated: ${round1(finalWeightKg as number)} kg (standard error +/-${weightErrorKg} kg; not measured).`);
   if (heightEstimated) parts.push(`Height estimated from ${heightSource === "ulna_length" ? "ulna length" : "knee height"}: ${Math.round(heightCm as number)} cm (not measured).`);
   if (nacs) {
     for (const ind of nacs.indicators) parts.push(`${ind.indicator} = ${ind.value} -> ${ind.classification} (${ind.cutoffApplied}).`);
@@ -459,10 +575,14 @@ export function integratedAdultScreen(
       measurement_quality: { data_quality_flags: flags, missing_measurements: missing },
       measurements: {
         bmi: bmi !== undefined ? round1(bmi) : null,
+        weight_kg: finalWeightKg !== undefined ? round1(finalWeightKg) : null,
+        weight_source: weightSource,
+        ...(weightErrorKg !== undefined && weightEstimated ? { weight_error_kg: weightErrorKg } : {}),
+        ...(weightEstimate ? { weight_estimate: weightEstimate } : {}),
         height_cm: heightCm !== undefined ? Math.round(heightCm * 10) / 10 : null,
         height_source: heightSource,
         ...(heightErrorCm !== undefined ? { height_error_cm: heightErrorCm } : {}),
-        ...(bmiRange ? { bmi_range_from_height_error: bmiRange } : {}),
+        ...(bmiRange ? { bmi_range_from_estimate_error: bmiRange } : {}),
       },
       nacs_classification: nacs,
       nacs_classification_skipped_reason: nacsSkipped,
@@ -528,7 +648,9 @@ export function registerAdultScreeningTools(server: McpServer): void {
         "an overall NACS status, clinical flags, a deterministic recommended action/referral, an evidence-traceable " +
         "explanation and limitations. Provide age via age_years, age_months, age_days, or date_of_birth + " +
         "assessment_date. If standing height cannot be measured, give ulna_length_cm (or knee_height_cm + race) and the " +
-        "height is estimated and clearly labelled as an estimate. The AI layer calling this tool MUST treat its output as authoritative and MUST NOT " +
+        "height is estimated and clearly labelled as an estimate. If the person cannot be weighed, set " +
+        "estimate_weight_if_missing with muac_mm and calf_circumference_cm (65+) and/or knee_height_cm + race: weight is then " +
+        "estimated (large standard error, always labelled, BMI reported as a range). The AI layer calling this tool MUST treat its output as authoritative and MUST NOT " +
         "recompute, override, or soften any classification, and MUST NOT invent measurements the caller did not supply.",
       inputSchema: {
         sex: z.enum(["male", "female"]),
@@ -546,6 +668,14 @@ export function registerAdultScreeningTools(server: McpServer): void {
           .describe("Ulna length in cm (point of the elbow to the midpoint of the wrist bone). Estimates height when height_cm is not given. Table range 18.5-32.0."),
         knee_height_cm: z.number().positive().optional().describe("Knee height in cm. Estimates height when height_cm and a usable ulna_length_cm are not given; needs race."),
         race: z.enum(["black", "white"]).optional().describe("Only used with knee_height_cm (Lee & Nieman equations are race-specific)"),
+        calf_circumference_cm: z.number().positive().optional().describe("Calf circumference in cm. Used only when weight is estimated (65+ equations)."),
+        subscapular_skinfold_mm: z.number().positive().optional().describe("Subscapular skinfold in mm. Used only when weight is estimated (65+ equations)."),
+        estimate_weight_if_missing: z
+          .boolean()
+          .optional()
+          .describe(
+            "Explicit opt-in. If true and weight_kg is absent, weight is ESTIMATED from muac_mm plus calf_circumference_cm (65+) and/or knee_height_cm + race (up to 80). Estimates carry large standard errors (about 4-14 kg) and are always labelled; BMI is then reported as a range."
+          ),
         pregnant_or_postpartum: z.boolean().optional().describe("If true the tool declines and points to pregnant_postpartum_integrated_screen"),
         measurement_context: z
           .enum(["community", "health_centre", "nutrition_rehabilitation", "hospital"])
@@ -574,6 +704,9 @@ export function registerAdultScreeningTools(server: McpServer): void {
         ulna_length_cm: args.ulna_length_cm,
         knee_height_cm: args.knee_height_cm,
         race: args.race,
+        calf_circumference_cm: args.calf_circumference_cm,
+        subscapular_skinfold_mm: args.subscapular_skinfold_mm,
+        estimate_weight_if_missing: args.estimate_weight_if_missing,
         pregnant_or_postpartum: args.pregnant_or_postpartum,
         measurement_context: args.measurement_context,
         must: args.must,
