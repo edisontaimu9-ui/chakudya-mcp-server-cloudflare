@@ -76,6 +76,19 @@ call fails, the screening tool falls back to the in-process WHO 2007 LMS
 calculation and says so in `limitations`; if the two ever disagree it uses the
 API result and raises a `bmi_for_age_source_disagreement` flag.
 
+**Height that can't be measured standing.** `adult_integrated_screen` accepts
+`ulna_length_cm` (18.5–32.0 cm) or `knee_height_cm` + `race` when `height_cm`
+is missing, and estimates height with the same functions as
+`stature_from_ulna_length` / `stature_from_knee_height` (ulna is tried first).
+A measured height always wins. The output labels the height as estimated
+(`measurements.height_source`, a `bmi_from_estimated_height` flag, limitations),
+shows the BMI range implied by the knee-height equation's published error, and
+flags `bmi_classification_uncertain` when that range crosses a NACS cut-off.
+One ulna-table cell (men 65+, 30.0 cm = 1.71 m) breaks the source table's own
+sequence, so it is refused rather than used. Weight is never estimated: the
+published equations' standard errors (about 4–14 kg) are too coarse to base a
+BMI on.
+
 Age boundaries follow NACS: under-5 tool is 0–59 months, school-age is
 60 months to under 18 years, adult is 18+. Not assessed for 5–19 years:
 height-for-age and weight-for-age (no reference loaded here).

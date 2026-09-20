@@ -177,6 +177,66 @@ const ULNA_HEIGHT_TABLE: UlnaRow[] = [
   { ulna_cm: 18.5, men_lt65_m: 1.46, men_gt65_m: 1.45, women_lt65_m: 1.47, women_gt65_m: 1.40 },
 ];
 
+// ── Pure estimators ─────────────────────────────────────────────────────────
+// The tool handlers below and other in-process modules (adultScreeningTools.ts)
+// share these, so a height is always estimated by the same rules. Behaviour of
+// the two tools is unchanged.
+
+export type StatureEstimate =
+  | {
+      ok: true;
+      method: "ulna_length" | "knee_height";
+      estimated_height_cm: number;
+      /** Published error of the equation, when the source gives one (Lee & Nieman knee height does; the ulna table does not). */
+      error_cm?: number;
+      /** Set when the source data cell is known to be doubtful. Callers that act on the number should not use it. */
+      unreliable_reason?: string;
+      detail: Record<string, string | number>;
+    }
+  | { ok: false; error: string };
+
+/** Ulna table cell known to break the source table's own sequence (see the row comment above). */
+const UNRELIABLE_ULNA_NOTE =
+  "This table cell (men >65 years, 30.0cm ulna = 1.71m) breaks the otherwise-monotonic sequence in the source table and may be a print/scan error — verify against source.";
+
+export function estimateStatureFromUlna(sex: Sex, ageYears: number, ulnaLengthCm: number): StatureEstimate {
+  const roundedUlna = Math.round(ulnaLengthCm * 2) / 2;
+  const row = ULNA_HEIGHT_TABLE.find((r) => r.ulna_cm === roundedUlna);
+  if (!row) return { ok: false, error: `ulna_length_cm ${ulnaLengthCm} is outside the table range (18.5-32.0cm).` };
+  const ageBand = ageYears >= 65 ? "gt65" : "lt65";
+  const heightM =
+    sex === "male" ? (ageBand === "lt65" ? row.men_lt65_m : row.men_gt65_m) : ageBand === "lt65" ? row.women_lt65_m : row.women_gt65_m;
+  const unreliable = roundedUlna === 30.0 && sex === "male" && ageBand === "gt65";
+  return {
+    ok: true,
+    method: "ulna_length",
+    estimated_height_cm: Math.round(heightM * 100),
+    unreliable_reason: unreliable ? UNRELIABLE_ULNA_NOTE : undefined,
+    detail: {
+      age_band: ageBand === "lt65" ? "<65 years" : ">=65 years",
+      matched_table_ulna_cm: roundedUlna,
+      estimated_height_m: heightM,
+    },
+  };
+}
+
+export function estimateStatureFromKneeHeight(race: Race, sex: Sex, ageYears: number, kneeHeightCm: number): StatureEstimate {
+  const row = selectKneeHeightRow(race, sex, ageYears);
+  if (!row) {
+    return {
+      ok: false,
+      error: `No matching equation for race="${race}", sex="${sex}", age_years=${ageYears}. Covered age bands: 6-18, 19-60, and >60 years.`,
+    };
+  }
+  return {
+    ok: true,
+    method: "knee_height",
+    estimated_height_cm: Math.round(row.compute(kneeHeightCm, ageYears) * 100) / 100,
+    error_cm: row.error_cm,
+    detail: { age_band: row.age_band, formula: row.formula },
+  };
+}
+
 export function registerStatureEstimationTools(server: McpServer) {
   // ── stature_from_knee_height ───────────────────────────────────────────────
   server.registerTool(
@@ -196,24 +256,18 @@ export function registerStatureEstimationTools(server: McpServer) {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     safeTool("stature_from_knee_height", async ({ race, sex, age_years, knee_height_cm }) => {
-      const row = selectKneeHeightRow(race, sex, age_years);
-      if (!row) {
-        return err(
-          `No matching equation for race="${race}", sex="${sex}", age_years=${age_years}. ` +
-            `Covered age bands: 6-18, 19-60, and >60 years.`
-        );
-      }
-      const statureCm = row.compute(knee_height_cm, age_years);
+      const est = estimateStatureFromKneeHeight(race, sex, age_years, knee_height_cm);
+      if (!est.ok) return err(est.error);
       return ok(
         {
           race,
           sex,
           age_years,
-          age_band: row.age_band,
+          age_band: est.detail.age_band,
           knee_height_cm,
-          estimated_stature_cm: Math.round(statureCm * 100) / 100,
-          formula: row.formula,
-          error_cm: row.error_cm,
+          estimated_stature_cm: est.estimated_height_cm,
+          formula: est.detail.formula,
+          error_cm: est.error_cm,
           note: "S: stature in cm; KH: knee height in cm; A: age in years.",
         },
         { disclaimer: STATURE_DISCLAIMER, citation: "Lee & Nieman" }
@@ -275,28 +329,18 @@ export function registerStatureEstimationTools(server: McpServer) {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     safeTool("stature_from_ulna_length", async ({ sex, age_years, ulna_length_cm }) => {
-      const roundedUlna = Math.round(ulna_length_cm * 2) / 2;
-      const row = ULNA_HEIGHT_TABLE.find((r) => r.ulna_cm === roundedUlna);
-      if (!row) {
-        return err(`ulna_length_cm ${ulna_length_cm} is outside the table range (18.5-32.0cm).`);
-      }
-      const ageBand = age_years >= 65 ? "gt65" : "lt65";
-      const heightM =
-        sex === "male" ? (ageBand === "lt65" ? row.men_lt65_m : row.men_gt65_m) : ageBand === "lt65" ? row.women_lt65_m : row.women_gt65_m;
-
+      const est = estimateStatureFromUlna(sex, age_years, ulna_length_cm);
+      if (!est.ok) return err(est.error);
       return ok(
         {
           sex,
           age_years,
-          age_band: ageBand === "lt65" ? "<65 years" : ">=65 years",
+          age_band: est.detail.age_band,
           ulna_length_cm,
-          matched_table_ulna_cm: roundedUlna,
-          estimated_height_m: heightM,
-          estimated_height_cm: Math.round(heightM * 100),
-          note:
-            roundedUlna === 30.0 && sex === "male" && ageBand === "gt65"
-              ? "This table cell (men >65 years, 30.0cm ulna = 1.71m) breaks the otherwise-monotonic sequence in the source table and may be a print/scan error — verify against source."
-              : undefined,
+          matched_table_ulna_cm: est.detail.matched_table_ulna_cm,
+          estimated_height_m: est.detail.estimated_height_m,
+          estimated_height_cm: est.estimated_height_cm,
+          note: est.unreliable_reason,
         },
         { disclaimer: STATURE_DISCLAIMER }
       );

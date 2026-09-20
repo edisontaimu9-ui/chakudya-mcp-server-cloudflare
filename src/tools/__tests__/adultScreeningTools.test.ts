@@ -193,3 +193,105 @@ describe("integratedAdultScreen — MUST as a separate second axis", () => {
     expect(run({ sex: "male", age: { age_years: 40 }, muac_mm: 250 }).referral.todo_malawi_protocol).toMatch(/TODO/);
   });
 });
+
+describe("integratedAdultScreen — height estimated from ulna length or knee height", () => {
+  const base = { sex: "male" as const, age: { age_years: 40 } };
+
+  it("estimates height from ulna length, computes BMI from it, and labels everything as estimated", () => {
+    const r = run({ ...base, weight_kg: 60, ulna_length_cm: 26.0 });
+    expect(r.measurements.height_source).toBe("ulna_length");
+    expect(r.measurements.height_cm).toBe(173);
+    expect(r.measurements.bmi).toBe(20.0); // 60 / 1.73^2 = 20.05
+    expect(indicator(r, "bmi")?.classification).toBe("normal");
+    expect(r.clinical_flags.map((f) => f.flag)).toContain("bmi_from_estimated_height");
+    expect(r.limitations.join(" ")).toMatch(/ESTIMATED from ulna length/);
+    expect(r.limitations.join(" ")).toMatch(/publishes no error figure/);
+    expect(r.explanation).toMatch(/Height estimated from ulna length: 173 cm \(not measured\)/);
+    expect(r.clinical_flags.map((f) => f.flag)).not.toContain("missing_measurement:height_cm");
+  });
+
+  it("a measured height always wins; the estimation inputs are ignored and flagged", () => {
+    const r = run({ ...base, weight_kg: 60, height_cm: 170, ulna_length_cm: 26.0, knee_height_cm: 50, race: "black" });
+    expect(r.measurements.height_source).toBe("measured");
+    expect(r.measurements.height_cm).toBe(170);
+    expect(r.clinical_flags.map((f) => f.flag)).toContain("data_quality:ignored");
+    expect(r.clinical_flags.map((f) => f.flag)).not.toContain("bmi_from_estimated_height");
+    expect(r.limitations.join(" ")).not.toMatch(/ESTIMATED/);
+  });
+
+  it("an out-of-range ulna is flagged, gives no height and no BMI — never a guess", () => {
+    const r = run({ ...base, weight_kg: 60, ulna_length_cm: 33 });
+    expect(r.measurements.height_source).toBeNull();
+    expect(r.measurements.bmi).toBeNull();
+    const flags = r.clinical_flags.map((f) => f.flag);
+    expect(flags).toContain("data_quality:height_estimate_unavailable");
+    expect(flags).toContain("missing_measurement:height_cm");
+  });
+
+  it("refuses the doubtful men >=65 / 30.0 cm table cell instead of using a likely typo", () => {
+    const r = run({ sex: "male", age: { age_years: 70 }, weight_kg: 60, ulna_length_cm: 30.0 });
+    expect(r.measurements.height_source).toBeNull();
+    expect(r.measurements.bmi).toBeNull();
+    expect(r.clinical_flags.find((f) => f.flag === "data_quality:height_estimate_unavailable")?.detail).toMatch(/NOT estimated/);
+  });
+
+  it("knee height needs race; without it the knee height is not used and that is flagged", () => {
+    const r = run({ ...base, weight_kg: 60, knee_height_cm: 50 });
+    expect(r.measurements.height_source).toBeNull();
+    expect(r.clinical_flags.find((f) => f.flag === "data_quality:height_estimate_unavailable")?.detail).toMatch(/race is required/);
+  });
+
+  it("knee height with race: estimates height and reports the equation's error and the BMI range it implies", () => {
+    const r = run({ ...base, weight_kg: 55, knee_height_cm: 50, race: "black" });
+    expect(r.measurements.height_source).toBe("knee_height");
+    expect(r.measurements.height_cm).toBe(162.9);
+    expect(r.measurements.height_error_cm).toBe(7.2);
+    expect(r.measurements.bmi_range_from_height_error?.low).toBeLessThan(r.measurements.bmi as number);
+    expect(r.measurements.bmi_range_from_height_error?.high).toBeGreaterThan(r.measurements.bmi as number);
+    expect(r.limitations.join(" ")).toMatch(/\+\/-7\.2 cm/);
+  });
+
+  it("flags an uncertain BMI category when the height error straddles a NACS cut-off", () => {
+    // 45 kg at 162.9 cm = BMI 17.0; +/-7.2 cm gives about 15.5-18.6, which spans the 16.0 and 18.5 cut-offs
+    const r = run({ ...base, weight_kg: 45, knee_height_cm: 50, race: "black" });
+    expect(r.clinical_flags.map((f) => f.flag)).toContain("bmi_classification_uncertain");
+  });
+
+  it("does not flag uncertainty when the whole error band sits inside one category", () => {
+    // 60 kg at 162.9 cm = BMI 22.6; band about 20.7-24.7 — inside 18.5-25
+    const r = run({ ...base, weight_kg: 60, knee_height_cm: 50, race: "black" });
+    expect(r.clinical_flags.map((f) => f.flag)).not.toContain("bmi_classification_uncertain");
+  });
+
+  it("prefers ulna over knee height when both are usable, and falls back to knee height when the ulna is unusable", () => {
+    const both = run({ ...base, weight_kg: 60, ulna_length_cm: 26.0, knee_height_cm: 50, race: "black" });
+    expect(both.measurements.height_source).toBe("ulna_length");
+    const fallback = run({ ...base, weight_kg: 60, ulna_length_cm: 33, knee_height_cm: 50, race: "black" });
+    expect(fallback.measurements.height_source).toBe("knee_height");
+    expect(fallback.clinical_flags.map((f) => f.flag)).toContain("data_quality:height_estimate_unavailable");
+  });
+
+  it("the estimated-height BMI feeds MUST, which is then labelled as resting on an estimate", () => {
+    const r = run({
+      ...base,
+      weight_kg: 45,
+      ulna_length_cm: 26.0, // 173 cm -> BMI 15.0
+      must: { weight_loss_band: "lt_5_percent", acute_disease_no_intake_over_5_days: false },
+    });
+    expect(r.screening.must?.component_scores.bmi).toBe(2);
+    expect(r.screening.must?.risk_category).toBe("high");
+    expect(r.limitations.join(" ")).toMatch(/MUST BMI score/);
+  });
+
+  it("without weight, an estimated height alone gives no BMI and MUST stays skipped", () => {
+    const r = run({ ...base, ulna_length_cm: 26.0, must: { weight_loss_band: "lt_5_percent", acute_disease_no_intake_over_5_days: false } });
+    expect(r.measurements.height_cm).toBe(173);
+    expect(r.measurements.bmi).toBeNull();
+    expect(r.screening.must).toBeNull();
+  });
+
+  it("ulna age band follows the person's age (>=65 uses the older-adult column)", () => {
+    const r = run({ sex: "female", age: { age_years: 70 }, weight_kg: 50, ulna_length_cm: 26.0 });
+    expect(r.measurements.height_cm).toBe(165);
+  });
+});
