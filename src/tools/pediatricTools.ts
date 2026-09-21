@@ -15,7 +15,7 @@ import { ok, safeTool } from "../utils/toolResult.js";
  * dietetic assessment.
  */
 
-const PEDS_DISCLAIMER =
+export const PEDS_DISCLAIMER =
   "Estimate/reference only, derived from published pediatric nutrition support formulas and tables. " +
   "Not a substitute for individualized clinical assessment and judgement.";
 
@@ -62,11 +62,14 @@ const IOM_PA_COEFFICIENTS = {
 } as const;
 
 // ── IOM (2005) protein RDA ──────────────────────────────────────────────────
-const IOM_PROTEIN_RDA: Array<{ label: string; maxMonths: number | null; gPerKg: number }> = [
+// maxMonths is an EXCLUSIVE upper bound (use pickBelow). Age groups follow the DRI
+// completed-years convention: "1-3 years" = 12 to <48 months, "4-13 years" = 48 to
+// <168 months, so a 3.5-year-old is in 1-3 years and a 13.5-year-old is in 4-13 years.
+export const IOM_PROTEIN_RDA: Array<{ label: string; maxMonths: number | null; gPerKg: number }> = [
   { label: "1-6 months", maxMonths: 6, gPerKg: 1.52 },
   { label: "6-12 months", maxMonths: 12, gPerKg: 1.5 },
-  { label: "1-3 years", maxMonths: 36, gPerKg: 1.1 },
-  { label: "4-13 years", maxMonths: 13 * 12, gPerKg: 0.95 },
+  { label: "1-3 years", maxMonths: 48, gPerKg: 1.1 },
+  { label: "4-13 years", maxMonths: 14 * 12, gPerKg: 0.95 },
   { label: "14-18 years", maxMonths: null, gPerKg: 0.85 },
 ];
 
@@ -87,7 +90,7 @@ const PRETERM_PROTEIN: Array<{ label: string; maxG: number | null; range: string
 ];
 
 // ── Term infant/child growth velocity (ASPEN handbook) ──────────────────────
-const TERM_GROWTH_MONTHS: Array<{
+export const TERM_GROWTH_MONTHS: Array<{
   label: string;
   maxMonth: number;
   girlsWeight: string;
@@ -104,7 +107,7 @@ const TERM_GROWTH_MONTHS: Array<{
   { label: "18-24 mo", maxMonth: 24, girlsWeight: "4-10 g/d", boysWeight: "4-9 g/d", length: "0.31 mm/d (girls), 0.30 mm/d (boys)" },
 ];
 
-const TERM_GROWTH_YEARS: Array<{ label: string; maxYear: number; weight: string; height: string }> = [
+export const TERM_GROWTH_YEARS: Array<{ label: string; maxYear: number; weight: string; height: string }> = [
   { label: "2-<4 y", maxYear: 4, weight: "3.5-5 g/d", height: "0.15-0.23 mm/d" },
   { label: "4-7 y", maxYear: 7, weight: "4.5-6.5 g/d", height: "0.16 mm/d" },
   { label: "7-<9 y", maxYear: 9, weight: "5-8.5 g/d", height: "0.13-0.16 mm/d" },
@@ -120,31 +123,93 @@ const PRETERM_GROWTH_REFERENCE = {
 };
 
 // ── Enteral feed initiation & advancement (Peds & Nutrition Support Handbook, 3rd ed. 2024)
-const ENTERAL_FEEDS: Array<{
+// Stored numerically so the same table drives both the text lookup below and the
+// pediatric_enteral_feed_plan calculator. In the source table the interval printed
+// under "Initiation" (bolus) belongs to initiation, and the interval printed under
+// "Goal Volume" belongs to the goal volume; "Advancement" carries its own interval
+// only for continuous feeds.
+export interface EnteralCell {
+  min: number;
+  max: number;
+  /** "mL/kg/hr", "mL/hr", "mL/kg", "mL" or "mL/feed" */
+  unit: string;
+  /** Interval in hours, e.g. [2, 8] renders "Q2-8H" */
+  everyHours?: [number, number];
+  upTo?: boolean;
+}
+
+export interface EnteralPhases {
+  initiation: EnteralCell;
+  advancement: EnteralCell;
+  goal: EnteralCell;
+}
+
+export const ENTERAL_FEEDS: Array<{
   label: string;
+  /** Exclusive upper bound in years (use pickBelow); null = open-ended */
   maxYears: number | null;
-  continuous: { initiation: string; advancement: string; goalVolume: string };
-  bolus: { initiation: string; advancement: string; goalVolume: string };
+  continuous: EnteralPhases;
+  bolus: EnteralPhases;
 }> = [
   {
     label: "0-12 months",
     maxYears: 1,
-    continuous: { initiation: "1-2 mL/kg/hr", advancement: "1-2 mL/kg Q2-8H", goalVolume: "6 mL/kg/hr" },
-    bolus: { initiation: "10-15 mL/kg", advancement: "10-30 mL/feed Q2-3H", goalVolume: "20-30 mL/kg Q3-5H" },
+    continuous: {
+      initiation: { min: 1, max: 2, unit: "mL/kg/hr" },
+      advancement: { min: 1, max: 2, unit: "mL/kg", everyHours: [2, 8] },
+      goal: { min: 6, max: 6, unit: "mL/kg/hr" },
+    },
+    bolus: {
+      initiation: { min: 10, max: 15, unit: "mL/kg", everyHours: [2, 3] },
+      advancement: { min: 10, max: 30, unit: "mL/feed" },
+      goal: { min: 20, max: 30, unit: "mL/kg", everyHours: [3, 5] },
+    },
   },
   {
     label: "1-6 years",
-    maxYears: 6,
-    continuous: { initiation: "1 mL/kg/hr", advancement: "1 mL/kg Q2-8H", goalVolume: "Up to 6 mL/kg/hr" },
-    bolus: { initiation: "5-10 mL/kg", advancement: "30-45 mL/feed Q3H", goalVolume: "15-20 mL/kg Q4-6H" },
+    maxYears: 7,
+    continuous: {
+      initiation: { min: 1, max: 1, unit: "mL/kg/hr" },
+      advancement: { min: 1, max: 1, unit: "mL/kg", everyHours: [2, 8] },
+      goal: { min: 6, max: 6, unit: "mL/kg/hr", upTo: true },
+    },
+    bolus: {
+      initiation: { min: 5, max: 10, unit: "mL/kg", everyHours: [3, 3] },
+      advancement: { min: 30, max: 45, unit: "mL/feed" },
+      goal: { min: 15, max: 20, unit: "mL/kg", everyHours: [4, 6] },
+    },
   },
   {
     label: "> 7 years",
     maxYears: null,
-    continuous: { initiation: "25 mL/hr", advancement: "25 mL Q2-8H", goalVolume: "100-150 mL/hr" },
-    bolus: { initiation: "90-120 mL", advancement: "60-90 mL/feed Q3-4H", goalVolume: "240-480 mL Q4-6H" },
+    continuous: {
+      initiation: { min: 25, max: 25, unit: "mL/hr" },
+      advancement: { min: 25, max: 25, unit: "mL", everyHours: [2, 8] },
+      goal: { min: 100, max: 150, unit: "mL/hr" },
+    },
+    bolus: {
+      initiation: { min: 90, max: 120, unit: "mL", everyHours: [3, 4] },
+      advancement: { min: 60, max: 90, unit: "mL/feed" },
+      goal: { min: 240, max: 480, unit: "mL", everyHours: [4, 6] },
+    },
   },
 ];
+
+export function formatEnteralCell(c: EnteralCell): string {
+  const amount = c.min === c.max ? `${c.min}` : `${c.min}-${c.max}`;
+  const every = c.everyHours
+    ? ` Q${c.everyHours[0]}${c.everyHours[1] !== c.everyHours[0] ? `-${c.everyHours[1]}` : ""}H`
+    : "";
+  return `${c.upTo ? "Up to " : ""}${amount} ${c.unit}${every}`;
+}
+
+export function describeEnteralPhases(p: EnteralPhases) {
+  return {
+    initiation: formatEnteralCell(p.initiation),
+    advancement: formatEnteralCell(p.advancement),
+    goalVolume: formatEnteralCell(p.goal),
+  };
+}
 
 const PRETERM_ENTERAL_REQUIREMENTS = {
   fluid_ml_per_kg_per_day: "120-200 mL/kg/d",
@@ -152,9 +217,10 @@ const PRETERM_ENTERAL_REQUIREMENTS = {
 };
 
 // ── Macronutrient distribution range (% of kcal) ────────────────────────────
-const MACRO_RANGES: Array<{ label: string; maxMonths: number | null; carb: [number, number]; fat: [number, number]; protein: [number, number] }> = [
+// maxMonths is an EXCLUSIVE upper bound (use pickBelow); "1-3 years" = 12 to <48 months.
+export const MACRO_RANGES: Array<{ label: string; maxMonths: number | null; carb: [number, number]; fat: [number, number]; protein: [number, number] }> = [
   { label: "Full-term infant", maxMonths: 12, carb: [35, 65], fat: [30, 55], protein: [7, 16] },
-  { label: "1-3 years", maxMonths: 36, carb: [45, 65], fat: [30, 40], protein: [5, 20] },
+  { label: "1-3 years", maxMonths: 48, carb: [45, 65], fat: [30, 40], protein: [5, 20] },
   { label: "4-18 years", maxMonths: null, carb: [45, 65], fat: [25, 35], protein: [10, 30] },
 ];
 
@@ -168,6 +234,70 @@ function pick<T extends { maxMonth?: number | null; maxYear?: number | null; max
     if (bound === null || bound === undefined || value <= bound) return row;
   }
   return table[table.length - 1];
+}
+
+/**
+ * Like pick(), but the bound is an EXCLUSIVE upper limit (value < bound). Used for age
+ * bands written as "1-3 years", "2-<4 y" etc., where the upper age is the start of the
+ * next band.
+ */
+export function pickBelow<T extends { maxMonth?: number | null; maxYear?: number | null; maxYears?: number | null; maxMonths?: number | null; maxG?: number | null }>(
+  table: T[],
+  value: number,
+  key: "maxMonth" | "maxYear" | "maxYears" | "maxMonths" | "maxG"
+): T {
+  for (const row of table) {
+    const bound = row[key];
+    if (bound === null || bound === undefined || value < bound) return row;
+  }
+  return table[table.length - 1];
+}
+
+export type TermGrowthReference =
+  | { kind: "months"; row: (typeof TERM_GROWTH_MONTHS)[number] }
+  | { kind: "years"; row: (typeof TERM_GROWTH_YEARS)[number] }
+  | { kind: "out_of_range"; reason: string };
+
+/**
+ * Chooses the ASPEN term growth-velocity row for a total age in months: the sex-specific
+ * 0-24 month table, or the 2-<11 year table. Ages of 11 years or more have no reference.
+ */
+export function selectTermGrowthReference(totalMonths: number): TermGrowthReference {
+  if (totalMonths <= 24) return { kind: "months", row: pick(TERM_GROWTH_MONTHS, totalMonths, "maxMonth") };
+  const years = totalMonths / 12;
+  if (years >= 11) {
+    return {
+      kind: "out_of_range",
+      reason: "The ASPEN term growth-velocity tables cover 0-24 months and 2 to <11 years; there is no reference for age >= 11 years.",
+    };
+  }
+  return { kind: "years", row: pickBelow(TERM_GROWTH_YEARS, years, "maxYear") };
+}
+
+/**
+ * DRI/FAO (2004) TEE lookup (kcal/kg/d). Ages under 1 year use the monthly table even when
+ * the age was supplied in years (e.g. 0.5 y = 6 months).
+ */
+export function lookupFaoTee(
+  sex: "male" | "female",
+  ageMonths: number | undefined,
+  ageYears: number | undefined
+): { kcalPerKg: number; bracketLabel: string } | null {
+  const months = ageMonths ?? (ageYears !== undefined && ageYears < 1 ? ageYears * 12 : undefined);
+  if (months !== undefined && months <= 12) {
+    const row = pick(FAO_TEE_MONTHS, months, "maxMonth");
+    return {
+      kcalPerKg: sex === "male" ? row.boys : row.girls,
+      bracketLabel: `${row.maxMonth === 1 ? "0" : row.maxMonth - 1}-${row.maxMonth} months`,
+    };
+  }
+  const years = ageYears ?? (ageMonths !== undefined ? ageMonths / 12 : undefined);
+  if (years === undefined) return null;
+  const row = pick(FAO_TEE_YEARS, years, "maxYear");
+  return {
+    kcalPerKg: sex === "male" ? row.boys : row.girls,
+    bracketLabel: `${row.maxYear - 1}-${row.maxYear} years`,
+  };
 }
 
 export function registerPediatricTools(server: McpServer) {
@@ -321,18 +451,8 @@ export function registerPediatricTools(server: McpServer) {
         }
 
         if (method === "dri_fao_2004") {
-          let kcalPerKg: number;
-          let bracketLabel: string;
-
-          if (age_months !== undefined && age_months <= 12) {
-            const row = pick(FAO_TEE_MONTHS, age_months, "maxMonth");
-            kcalPerKg = sex === "male" ? row.boys : row.girls;
-            bracketLabel = `${row.maxMonth === 1 ? "0" : row.maxMonth - 1}-${row.maxMonth} months`;
-          } else if (ageYears !== undefined) {
-            const row = pick(FAO_TEE_YEARS, ageYears, "maxYear");
-            kcalPerKg = sex === "male" ? row.boys : row.girls;
-            bracketLabel = `${row.maxYear - 1}-${row.maxYear} years`;
-          } else {
+          const fao = lookupFaoTee(sex, age_months, age_years);
+          if (!fao) {
             return {
               content: [{ type: "text" as const, text: "age_years or age_months is required for dri_fao_2004." }],
               isError: true as const,
@@ -341,9 +461,9 @@ export function registerPediatricTools(server: McpServer) {
 
           return ok({
             method: "DRI/FAO (2004) TEE",
-            age_bracket: bracketLabel,
-            kcal_per_kg_per_day: kcalPerKg,
-            total_tee_kcal_per_day: Math.round(kcalPerKg * weight_kg),
+            age_bracket: fao.bracketLabel,
+            kcal_per_kg_per_day: fao.kcalPerKg,
+            total_tee_kcal_per_day: Math.round(fao.kcalPerKg * weight_kg),
             disclaimer: PEDS_DISCLAIMER,
           });
         }
@@ -452,7 +572,7 @@ export function registerPediatricTools(server: McpServer) {
       }
 
       if (source === "iom_2005") {
-        const row = pick(IOM_PROTEIN_RDA, ageMonths, "maxMonths");
+        const row = pickBelow(IOM_PROTEIN_RDA, ageMonths, "maxMonths");
         return ok({
           source: "IOM (2005) RDA for healthy growth",
           age_bracket: row.label,
@@ -484,7 +604,8 @@ export function registerPediatricTools(server: McpServer) {
         "Look up expected/reference growth velocity (weight gain, linear growth) from the ASPEN Paediatric " +
         "and Neonatal Nutrition Support Handbook, 3rd edition. Set preterm=true for the preterm infant " +
         "reference (initial weight loss, weight/length/HC velocity — no age input needed). Otherwise pass " +
-        "age_months (0-24, sex-specific) or age_years (2-11, not sex-specific) for term infants/children.",
+        "age_months or age_years for term infants/children: up to 24 months the reference is sex-specific " +
+        "(sex required); from 2 to <11 years it is not sex-specific. No reference exists from 11 years.",
       inputSchema: {
         preterm: z.boolean().optional().default(false),
         sex: z.enum(["male", "female"]).optional().describe("Required for term infants age_months <= 24"),
@@ -502,40 +623,44 @@ export function registerPediatricTools(server: McpServer) {
         });
       }
 
-      if (age_months !== undefined) {
+      const totalMonths = age_months ?? (age_years !== undefined ? age_years * 12 : undefined);
+      if (totalMonths === undefined) {
+        return {
+          content: [
+            { type: "text" as const, text: "Provide preterm=true, or age_months (0-24), or age_years (2-11)." },
+          ],
+          isError: true as const,
+        };
+      }
+
+      const ref = selectTermGrowthReference(totalMonths);
+      if (ref.kind === "out_of_range") {
+        return { content: [{ type: "text" as const, text: ref.reason }], isError: true as const };
+      }
+
+      if (ref.kind === "months") {
         if (!sex) {
           return {
-            content: [{ type: "text" as const, text: "sex is required for term infant growth velocity (age_months)." }],
+            content: [{ type: "text" as const, text: "sex is required for term infant growth velocity (ages up to 24 months)." }],
             isError: true as const,
           };
         }
-        const row = pick(TERM_GROWTH_MONTHS, age_months, "maxMonth");
         return ok({
           source: "ASPEN Paediatric and Neonatal Nutrition Support Handbook, 3rd ed. — term infants",
-          age_bracket: row.label,
-          weight_velocity: sex === "male" ? row.boysWeight : row.girlsWeight,
-          length_velocity: row.length,
+          age_bracket: ref.row.label,
+          weight_velocity: sex === "male" ? ref.row.boysWeight : ref.row.girlsWeight,
+          length_velocity: ref.row.length,
           disclaimer: PEDS_DISCLAIMER,
         });
       }
 
-      if (age_years !== undefined) {
-        const row = pick(TERM_GROWTH_YEARS, age_years, "maxYear");
-        return ok({
-          source: "ASPEN Paediatric and Neonatal Nutrition Support Handbook, 3rd ed. — term children",
-          age_bracket: row.label,
-          weight_velocity: row.weight,
-          height_velocity: row.height,
-          disclaimer: PEDS_DISCLAIMER,
-        });
-      }
-
-      return {
-        content: [
-          { type: "text" as const, text: "Provide preterm=true, or age_months (0-24), or age_years (2-11)." },
-        ],
-        isError: true as const,
-      };
+      return ok({
+        source: "ASPEN Paediatric and Neonatal Nutrition Support Handbook, 3rd ed. — term children",
+        age_bracket: ref.row.label,
+        weight_velocity: ref.row.weight,
+        height_velocity: ref.row.height,
+        disclaimer: PEDS_DISCLAIMER,
+      });
     })
   );
 
@@ -554,13 +679,13 @@ export function registerPediatricTools(server: McpServer) {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     safeTool("pediatric_enteral_feed_advancement", async ({ age_years, feed_type }) => {
-      const row = pick(ENTERAL_FEEDS, age_years, "maxYears");
+      const row = pickBelow(ENTERAL_FEEDS, age_years, "maxYears");
       const result: Record<string, unknown> = {
         source: "Pediatric and Nutrition Support Handbook, 3rd edition (2024)",
         age_bracket: row.label,
       };
-      if (!feed_type || feed_type === "continuous") result.continuous_feeds = row.continuous;
-      if (!feed_type || feed_type === "bolus") result.bolus_feeds = row.bolus;
+      if (!feed_type || feed_type === "continuous") result.continuous_feeds = describeEnteralPhases(row.continuous);
+      if (!feed_type || feed_type === "bolus") result.bolus_feeds = describeEnteralPhases(row.bolus);
       result.disclaimer = PEDS_DISCLAIMER;
       return ok(result);
     })
@@ -618,7 +743,7 @@ export function registerPediatricTools(server: McpServer) {
         const months = age_months ?? (age_years !== undefined ? age_years * 12 : undefined);
         if (months === undefined) return { content: [{ type: "text" as const, text: "age_months or age_years is required." }], isError: true as const };
 
-        const row = pick(MACRO_RANGES, months, "maxMonths");
+        const row = pickBelow(MACRO_RANGES, months, "maxMonths");
         const inRange = (val: number | undefined, range: [number, number]) =>
           val === undefined ? null : val >= range[0] && val <= range[1];
 

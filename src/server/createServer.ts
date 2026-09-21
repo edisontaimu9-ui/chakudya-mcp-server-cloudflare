@@ -37,6 +37,7 @@ import { registerPregnantPostpartumScreeningTools } from "../tools/pregnantPostp
 import { registerBmiForAgeTools } from "../tools/bmiForAgeTools.js";
 import { registerSchoolAgeScreeningTools } from "../tools/schoolAgeScreeningTools.js";
 import { registerAdultScreeningTools } from "../tools/adultScreeningTools.js";
+import { registerPediatricAssessmentTools } from "../tools/pediatricAssessmentTools.js";
 
 /**
  * Builds a new McpServer instance with every Chakudya tool registered.
@@ -90,6 +91,7 @@ export function createChakudyaMcpServer(): McpServer {
   registerBmiForAgeTools(server);
   registerSchoolAgeScreeningTools(server);
   registerAdultScreeningTools(server);
+  registerPediatricAssessmentTools(server);
 
   return server;
 }

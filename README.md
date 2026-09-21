@@ -108,6 +108,23 @@ Age boundaries follow NACS: under-5 tool is 0–59 months, school-age is
 60 months to under 18 years, adult is 18+. Not assessed for 5–19 years:
 height-for-age and weight-for-age (no reference loaded here).
 
+## Paediatric assessment tools (BND 415)
+
+Beyond the reference look-ups already in `pediatricTools.ts` (fluid, energy,
+protein, growth velocity/enteral-feed *tables*, macronutrient ranges — all
+sourced from the BND 415 Clinical Nutrition: Paediatric Medicine Resources
+sheet), `pediatricAssessmentTools.ts` adds three calculators that turn those
+tables into numbers for a specific child:
+
+| Tool | What it does |
+|---|---|
+| `pediatric_activity_stress_factor_reference` | Activity (confined to bed → high/vigorous) and metabolic stress (starvation → growth failure) factor tables; given a `bmr_kcal_per_day` plus a chosen `activity_level`/`metabolic_condition`, returns a low/mid/high TEE range with the factors multiplied together |
+| `pediatric_growth_velocity_assessment` | Calculates a child's actual weight/length/HC velocity from two dated measurements and classifies it against the ASPEN handbook reference (term: 0-24mo sex-specific, 2-<11y; preterm: weight/length/HC velocity + initial weight loss) |
+| `pediatric_enteral_feed_plan` | Converts the enteral feed initiation/advancement/goal table into absolute mL/hr or mL/feed for a given weight, plus step count and estimated time to goal |
+
+These are pure calculators (no Chakudya API calls) registered alongside the
+existing pediatric tools in `createServer.ts`.
+
 ## Connecting an MCP client
 
 Same as the Render deployment: point the client at
