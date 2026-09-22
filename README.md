@@ -125,6 +125,24 @@ tables into numbers for a specific child:
 These are pure calculators (no Chakudya API calls) registered alongside the
 existing pediatric tools in `createServer.ts`.
 
+## INTERGROWTH-21st preterm postnatal growth (Fenton alternative)
+
+`intergrowthPretermGrowthTools.ts` adds `intergrowth_preterm_postnatal_growth_zscore` —
+weight/length/head-circumference z-score and percentile by postmenstrual age
+(27-64 exact weeks), for tracking a preterm infant's growth after birth.
+
+This covers the same clinical purpose as the Fenton 2013 chart, but unlike
+Fenton, INTERGROWTH-21st's z-score tables (Villar et al, *Lancet Glob Health*
+2015;3:e681-91) are published openly by the INTERGROWTH-21st Network — no
+request-to-author needed. The 6 tables in `src/data/intergrowth/*.json`
+(weight/length/head-circumference × boys/girls, 38 rows each) are transcribed
+verbatim from the official PDFs, not estimated from a chart image.
+
+If/when the equivalent Fenton LMS data comes back from Dr. Fenton, add a
+separate `fentonGrowthTools.ts` alongside this one rather than merging them —
+keep the two standards distinguishable in tool output since they're not
+numerically identical.
+
 ## Connecting an MCP client
 
 Same as the Render deployment: point the client at
