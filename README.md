@@ -143,6 +143,32 @@ separate `fentonGrowthTools.ts` alongside this one rather than merging them —
 keep the two standards distinguishable in tool output since they're not
 numerically identical.
 
+## Session memory (memory_write / memory_recall / memory_consolidate)
+
+The Worker itself holds no state between requests (one fresh `McpServer` per
+HTTP call — see `mcpTransport.ts`), but memory is still real and persistent:
+it's stored server-side in `chakudya-api`'s Supabase `assistant_memory`
+table (Write → Consolidate → Recall → Apply), not in this Worker. That part
+already existed.
+
+What's new: this Worker now mints an `Mcp-Session-Id` on `initialize` (or
+honours one the client already sent) and returns it in the response header,
+per standard MCP Streamable HTTP behaviour. Any spec-compliant client
+(including Claude.ai's own connector) already echoes that header back on
+every later request in the session — so `memory_write`, `memory_recall`,
+and `memory_consolidate` now default their `session_id` argument to it. A
+model driving this MCP server can just call `memory_write("patient is 8
+weeks preterm")` without ever inventing or tracking a session_id itself, and
+`memory_recall` later in the same session picks it back up automatically.
+
+The explicit `session_id` argument still exists and still wins when passed
+— that's what lets a caller deliberately span memory across separate MCP
+sessions (e.g. Thanzi Coach keying memory by WhatsApp phone number instead
+of by MCP session, so a patient's context survives across different
+conversations, not just within one). If neither an explicit `session_id`
+nor an `Mcp-Session-Id` header is available, the memory tools return a clear
+tool error rather than silently writing/reading nothing.
+
 ## Connecting an MCP client
 
 Same as the Render deployment: point the client at

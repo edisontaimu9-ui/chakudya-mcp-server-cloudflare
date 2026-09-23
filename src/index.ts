@@ -14,7 +14,22 @@ import { OneShotTransport } from "./server/mcpTransport.js";
  * and running the MCP protocol in stateless mode (see mcpTransport.ts for
  * why). The Render deployment is untouched by any of this; the two run as
  * fully independent services against the same Chakudya API.
+ *
+ * Sessions ARE tracked, but only as an identity, not as server-held state
+ * (see mcpTransport.ts's note on why: no long-running process, no guarantee
+ * two requests land on the same isolate). On `initialize`, this Worker mints
+ * an Mcp-Session-Id if the client didn't already send one, and returns it in
+ * the response header — standard MCP Streamable HTTP behaviour, and any
+ * spec-compliant client (including Claude.ai's own connector) is already
+ * expected to echo that header back on every later request in the session.
+ * That id is threaded into createChakudyaMcpServer() purely so the memory
+ * tools (memoryTools.ts) can default to it — the actual memory storage
+ * lives in chakudya-api/Supabase, not in this Worker, so this Worker being
+ * stateless per-request is fine; the session identity is round-tripped by
+ * the client, not held here.
  */
+
+const SESSION_ID_HEADER = "Mcp-Session-Id";
 
 function corsHeaders(req: Request): HeadersInit {
   const env = getEnv();
@@ -23,8 +38,8 @@ function corsHeaders(req: Request): HeadersInit {
   if (!origin || !env.MCP_ALLOWED_ORIGINS.includes(origin)) return {};
   return {
     "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, Mcp-Session-Id",
-    "Access-Control-Expose-Headers": "Mcp-Session-Id",
+    "Access-Control-Allow-Headers": `Content-Type, Authorization, ${SESSION_ID_HEADER}`,
+    "Access-Control-Expose-Headers": SESSION_ID_HEADER,
   };
 }
 
@@ -61,32 +76,48 @@ async function handleMcpRequest(req: Request): Promise<Response> {
     );
   }
 
-  if (!isInitializeRequest(body) && (body as { method?: string }).method === undefined) {
+  const isInit = isInitializeRequest(body);
+
+  if (!isInit && (body as { method?: string }).method === undefined) {
     return Response.json(
       { jsonrpc: "2.0", error: { code: -32600, message: "Invalid Request" }, id: null },
       { status: 400 }
     );
   }
 
+  // Session identity: honour a client-supplied Mcp-Session-Id if present (lets a client
+  // deliberately resume a known session), otherwise mint one on initialize. A non-initialize
+  // request with no header at all gets no session id — memory tools handle that explicitly
+  // (see memoryTools.ts's resolveSessionId) rather than silently minting a fresh, unusable one.
+  const incomingSessionId = req.headers.get(SESSION_ID_HEADER) || undefined;
+  const sessionId = incomingSessionId ?? (isInit ? crypto.randomUUID() : undefined);
+
+  const attachSessionHeader = (res: Response): Response => {
+    if (sessionId) res.headers.set(SESSION_ID_HEADER, sessionId);
+    return res;
+  };
+
   const transport = new OneShotTransport();
   let server: McpServer | undefined;
 
   try {
-    server = createChakudyaMcpServer();
+    server = createChakudyaMcpServer(sessionId);
     await server.connect(transport as any);
 
     const response = await transport.handle(body);
 
     if (response === null) {
       // Notification — no reply expected. 202 Accepted, empty body.
-      return new Response(null, { status: 202 });
+      return attachSessionHeader(new Response(null, { status: 202 }));
     }
-    return Response.json(response);
+    return attachSessionHeader(Response.json(response));
   } catch (e) {
     logger.error("mcp_request_error", { error: e instanceof Error ? e.message : String(e) });
-    return Response.json(
-      { jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null },
-      { status: 500 }
+    return attachSessionHeader(
+      Response.json(
+        { jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null },
+        { status: 500 }
+      )
     );
   } finally {
     await server?.close().catch(() => {});

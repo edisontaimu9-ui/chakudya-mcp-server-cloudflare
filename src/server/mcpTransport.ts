@@ -15,11 +15,17 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
  *
  * Since every tool in this project is stateless (each one just calls the
  * Chakudya API and returns — see createServer.ts's own comment on this),
- * nothing here actually *needs* a persistent session, so this Worker runs
- * in the SDK's documented "stateless" mode: one fresh `McpServer` +
+ * nothing here actually *needs* server-held session state, so this Worker
+ * runs in the SDK's documented "stateless" mode: one fresh `McpServer` +
  * `OneShotTransport` per HTTP request, handling exactly one JSON-RPC
  * message (initialize, tools/list, tools/call, ...) and returning exactly
- * one response. No `Mcp-Session-Id` is required or issued.
+ * one response.
+ *
+ * `Mcp-Session-Id` IS minted and read (see index.ts), but purely as an
+ * identity string round-tripped by the client — this transport itself holds
+ * nothing keyed by it. The memory tools (memoryTools.ts) use that id to
+ * scope reads/writes against chakudya-api/Supabase, which is where the
+ * actual persistence lives, not here.
  */
 export class OneShotTransport {
   sessionId?: string;

@@ -43,12 +43,17 @@ import { registerIntergrowthPretermGrowthTools } from "../tools/intergrowthPrete
 /**
  * Builds a new McpServer instance with every Chakudya tool registered.
  *
- * A fresh instance is created per MCP session (see src/index.ts) — the tools
- * themselves are stateless (they just call the Chakudya API), so this is
- * cheap, and it keeps sessions fully isolated from one another as the MCP
- * Streamable HTTP spec expects.
+ * A fresh instance is created per HTTP request (see src/index.ts) — nearly
+ * every tool here is stateless (it just calls the Chakudya API and returns),
+ * so rebuilding is cheap. The exception is memory: `sessionId` is this
+ * request's MCP session identity (the `Mcp-Session-Id` header — see
+ * index.ts for where it's minted/read), threaded into registerMemoryTools()
+ * so memory_write/memory_recall/memory_consolidate can default to it
+ * without the caller having to pass session_id on every call. The
+ * server instance itself still holds no state between requests — the actual
+ * memory lives in chakudya-api/Supabase, keyed by that session id.
  */
-export function createChakudyaMcpServer(): McpServer {
+export function createChakudyaMcpServer(sessionId?: string): McpServer {
   const server = new McpServer({
     name: "chakudya-nutrition-registry",
     version: "1.0.0",
@@ -80,7 +85,7 @@ export function createChakudyaMcpServer(): McpServer {
   registerClinicalReferenceRangesTools(server);
   registerCarbCountingDoseAdjustmentTools(server);
   registerUserDataTools(server);
-  registerMemoryTools(server);
+  registerMemoryTools(server, sessionId);
   registerPackagedSubmissionTools(server);
   registerRecipeMealTools(server);
   registerFoodLogTools(server);
