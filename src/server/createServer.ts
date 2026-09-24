@@ -39,6 +39,7 @@ import { registerSchoolAgeScreeningTools } from "../tools/schoolAgeScreeningTool
 import { registerAdultScreeningTools } from "../tools/adultScreeningTools.js";
 import { registerPediatricAssessmentTools } from "../tools/pediatricAssessmentTools.js";
 import { registerIntergrowthPretermGrowthTools } from "../tools/intergrowthPretermGrowthTools.js";
+import { registerFentonPretermTools } from "../tools/fentonPretermTools.js";
 
 /**
  * Builds a new McpServer instance with every Chakudya tool registered.
@@ -99,6 +100,7 @@ export function createChakudyaMcpServer(sessionId?: string): McpServer {
   registerAdultScreeningTools(server);
   registerPediatricAssessmentTools(server);
   registerIntergrowthPretermGrowthTools(server);
+  registerFentonPretermTools(server);
 
   return server;
 }

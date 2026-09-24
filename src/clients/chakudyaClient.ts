@@ -56,6 +56,36 @@ async function request<T = unknown>(
     timeoutMs?: number;
   } = {}
 ): Promise<CnrEnvelope<T>> {
+  const { text } = await rawRequest(method, path, opts);
+
+  let parsed: unknown = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    // Non-JSON response body; fall through with an empty envelope. Routes
+    // that don't return JSON (e.g. GET /fenton-preterm/chart, image/svg+xml)
+    // must use chakudyaClient.getRaw() instead of get(), not this function.
+  }
+
+  return (parsed ?? {}) as CnrEnvelope<T>;
+}
+
+/**
+ * Shared fetch logic (binding preference, timeout, error normalization) for
+ * both the JSON-parsing `request()` above and `getRaw()` below, which some
+ * routes need because they don't return a CNR JSON envelope at all (e.g.
+ * GET /fenton-preterm/chart returns image/svg+xml).
+ */
+async function rawRequest(
+  method: "GET" | "POST" | "DELETE",
+  path: string,
+  opts: {
+    params?: Record<string, string | number | boolean | undefined>;
+    body?: unknown;
+    useAdminKey?: boolean;
+    timeoutMs?: number;
+  } = {}
+): Promise<{ res: Response; text: string; contentType: string }> {
   const { params, body, useAdminKey, timeoutMs = 15_000 } = opts;
   const url = buildUrl(path, params);
 
@@ -114,23 +144,24 @@ async function request<T = unknown>(
   }
 
   const text = await res.text();
-  let parsed: unknown = null;
-  try {
-    parsed = text ? JSON.parse(text) : null;
-  } catch {
-    // Non-JSON response body; fall through with raw text captured below.
-  }
+  const contentType = res.headers.get("content-type") ?? "";
 
   if (!res.ok) {
+    let parsed: unknown = null;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      // error body wasn't JSON either (unlikely for this API); fall through
+    }
     const message =
-      (parsed as CnrEnvelope | null)?.message ??
-      `Chakudya API returned HTTP ${res.status} for ${method} ${path}`;
+      (parsed as CnrEnvelope | null)?.message ?? `Chakudya API returned HTTP ${res.status} for ${method} ${path}`;
     logger.warn("chakudya_api_error", { path, status: res.status, message });
     throw new ChakudyaApiError(message, res.status, path, parsed ?? text);
   }
 
-  return (parsed ?? {}) as CnrEnvelope<T>;
+  return { res, text, contentType };
 }
+
 
 export const chakudyaClient = {
   get: <T = unknown>(
@@ -138,6 +169,14 @@ export const chakudyaClient = {
     params?: Record<string, string | number | boolean | undefined>,
     opts: { useAdminKey?: boolean } = {}
   ) => request<T>("GET", path, { params, useAdminKey: opts.useAdminKey }),
+
+  /**
+   * For routes that don't return a CNR JSON envelope — currently only
+   * GET /fenton-preterm/chart (image/svg+xml). Returns the raw response
+   * text and its content-type; does NOT attempt JSON.parse.
+   */
+  getRaw: (path: string, params?: Record<string, string | number | boolean | undefined>) =>
+    rawRequest("GET", path, { params }).then(({ text, contentType }) => ({ text, contentType })),
 
   post: <T = unknown>(path: string, body: unknown, opts: { useAdminKey?: boolean } = {}) =>
     request<T>("POST", path, { body, useAdminKey: opts.useAdminKey }),
