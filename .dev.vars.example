@@ -10,5 +10,9 @@ MCP_AUTH_TOKEN=dev-only-token-change-me
 # the "MCP_AUTH_TOKEN required" check — leave unset for prod-like local testing.
 ENVIRONMENT=development
 
+# A chakudya-api consumer key (create one on the Chakudya developer console). chakudya-api
+# refuses every data route without a key, so most tools fail with a 401 until this is set.
+# CHAKUDYA_API_KEY=
+
 # Only needed if you want to test an admin-gated CNR route locally.
 # CHAKUDYA_ADMIN_API_KEY=

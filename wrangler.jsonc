@@ -40,7 +40,10 @@
       "service": "chakudya-api"
     }
   ]
-  // Secrets (MCP_AUTH_TOKEN, and optionally CHAKUDYA_ADMIN_API_KEY) are NOT
-  // set here — see README.md. Set them with:
+  // Secrets (MCP_AUTH_TOKEN, CHAKUDYA_API_KEY, and optionally CHAKUDYA_ADMIN_API_KEY)
+  // are NOT set here, see README.md. CHAKUDYA_API_KEY is a chakudya-api consumer key: the
+  // API refuses every data route without a key, and a service binding does not bypass
+  // that. Set them in the Cloudflare dashboard (Settings > Variables and Secrets) or with:
   //   npx wrangler secret put MCP_AUTH_TOKEN
+  //   npx wrangler secret put CHAKUDYA_API_KEY
 }

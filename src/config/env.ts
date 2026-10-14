@@ -15,6 +15,8 @@ import { z } from "zod";
 export interface WorkerBindings {
   CHAKUDYA_API_BASE_URL?: string;
   CHAKUDYA_ADMIN_API_KEY?: string;
+  /** Consumer API key for chakudya-api, sent on every call (see chakudyaClient.ts). */
+  CHAKUDYA_API_KEY?: string;
   MCP_AUTH_TOKEN?: string;
   MCP_ALLOWED_ORIGINS?: string;
   MCP_RATE_LIMIT_PER_MIN?: string;
@@ -34,6 +36,7 @@ export interface WorkerBindings {
 const EnvSchema = z.object({
   CHAKUDYA_API_BASE_URL: z.string().url().default("https://chakudya-api.edisontaimu9.workers.dev"),
   CHAKUDYA_ADMIN_API_KEY: z.string().optional(),
+  CHAKUDYA_API_KEY: z.string().optional(),
   MCP_AUTH_TOKEN: z.string().optional(),
   MCP_ALLOWED_ORIGINS: z
     .string()

@@ -483,7 +483,7 @@ export function integratedAdultScreen(
   }
   if (ageYears < 19) {
     limitations.push(
-      "Age 18 to under 19: NACS adult cut-offs are applied (NACS groups 18+ as adults). bmi_for_age_classify (WHO 2007, to 19 years) can be used as a cross-check."
+      "Age 18 to under 19: NACS adult cut-offs are applied (NACS groups 18+ as adults). chakudya-api's GET /bmi-for-age/classify (WHO 2007, to 19 years) can be used as a cross-check."
     );
   }
   if (must && context === "nutrition_rehabilitation") {

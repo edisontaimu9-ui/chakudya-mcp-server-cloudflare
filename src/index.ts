@@ -101,7 +101,7 @@ async function handleMcpRequest(req: Request): Promise<Response> {
   let server: McpServer | undefined;
 
   try {
-    server = createChakudyaMcpServer(sessionId);
+    server = createChakudyaMcpServer();
     await server.connect(transport as any);
 
     const response = await transport.handle(body);

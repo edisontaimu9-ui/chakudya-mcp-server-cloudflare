@@ -91,6 +91,11 @@ async function rawRequest(
 
   const headers: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
+  // chakudya-api refuses every data route without an API key, so every call carries one.
+  // Admin-gated routes (registry writes, the packaged review queue, RAG ingest, memory
+  // consolidation) use CHAKUDYA_ADMIN_API_KEY; everything else uses the consumer key
+  // CHAKUDYA_API_KEY. A consumer key is refused on admin routes, and an admin key also
+  // works everywhere, but keeping them apart means a leaked consumer key can only read.
   if (useAdminKey) {
     const adminKey = getEnv().CHAKUDYA_ADMIN_API_KEY;
     if (!adminKey) {
@@ -102,6 +107,13 @@ async function rawRequest(
       );
     }
     headers.Authorization = `Bearer ${adminKey}`;
+  } else {
+    const apiKey = getEnv().CHAKUDYA_API_KEY;
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    } else {
+      logger.warn("chakudya_api_key_missing", { path });
+    }
   }
 
   const controller = new AbortController();

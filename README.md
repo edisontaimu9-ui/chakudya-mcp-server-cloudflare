@@ -1,11 +1,11 @@
 # Chakudya MCP Server — Cloudflare Workers edition
 
 This is the **Cloudflare Workers** deployment of the Chakudya MCP server. It
-exposes the same 11 tool groups over the same MCP Streamable HTTP protocol,
-calling the same Chakudya Nutrition Registry (CNR) API, as the existing
-**Render/Express** deployment (`chakudya-mcp-server` repo). The two are
-independent services that can run side by side — this one is not a
-replacement, it's a second front door to the same tools.
+exposes the clinical calculators, reference tables and screening workflows
+over MCP Streamable HTTP. It no longer wraps the Chakudya Nutrition Registry
+(CNR) REST endpoints as tools: see **What lives in CNR, not here** below. The
+older **Render/Express** deployment (`chakudya-mcp-server` repo) still has the
+full set of wrapper tools.
 
 ## What's different from the Render version
 
@@ -20,9 +20,34 @@ they call:
 | Crypto (OAuth PKCE) | `node:crypto` | Web Crypto (`crypto.subtle`, `crypto.randomUUID()`) |
 | GET/DELETE `/mcp` (SSE stream, session teardown) | Supported | Not supported (405) — no standing session in stateless mode |
 
-Everything else — `src/tools/*`, `src/utils/toolResult.ts`, the WHO growth
-data, `src/server/createServer.ts` — is byte-for-byte identical to the
-Render version, copied straight across.
+The calculators, screening tools and WHO growth data in `src/tools/*` match
+the Render version. This version has dropped the CNR wrapper tools (below).
+
+## What lives in CNR, not here
+
+Tools that only forwarded a request to a CNR endpoint were removed so there is
+one implementation, in CNR. Call these on chakudya-api directly, with a
+consumer API key (`Authorization: Bearer <key>`):
+
+| Removed MCP tools | Use this CNR route instead |
+|---|---|
+| `search_food`, `get_food_details`, `barcode_lookup`, `foods_autocomplete`, `foods_categories`, `get_food_serving_sizes`, `generate_nutrition_label`, `packaged_food_search` | `GET /foods`, `/foods/lookup`, `/foods/search`, `/foods/{id}`, `/foods/autocomplete`, `/foods/categories`, `/foods/{id}/label`, `/packaged` |
+| `calculate_nutrients`, `analyze_meal`, `calculate_recipe_nutrition`, `analyze_meal_clinical`, `parse_ingredients_text` | `POST /recipes/calculate`, `/meals/analyze`, `/ingredients/parse` |
+| `find_food_substitutes`, `compare_foods_nutrients` | `GET /foods/substitutes`, `/foods/compare` |
+| `diabetes_exchange_lookup`, `renal_exchange_lookup`, `enteral_formula_lookup`, `glycaemic_index_reference`, `list_drug_nutrient_interactions`, `search_drug_nutrient_interactions` | `GET /exchange`, `/renal`, `/formulas`, `/glycaemic-index`, `/drug-interactions[/search]` |
+| `dri_life_stages`, `dri_lookup`, `dri_compare_intake` | `GET /dri/life-stages`, `GET /dri`, `POST /dri/compare` |
+| `fenton_preterm_*` (6 tools), `bmi_for_age_classify` | `GET/POST /fenton-preterm/*`, `GET /bmi-for-age/classify` |
+| `log_food_entry`, `list_food_log`, `delete_food_log_entry`, `get_food_log_summary`, `list_favorites`, `save_favorite`, `remove_favorite`, `list_view_history`, `log_view` | `/log`, `/favorites`, `/history` |
+| `memory_write`, `memory_recall`, `memory_consolidate` | `POST /memory/write`, `/memory/recall`, `/memory/consolidate` (admin) |
+| `submit_packaged_food`, `submit_packaged_food_photo`, `list_pending_packaged_foods` | `POST /packaged/submit`, `/packaged/scan`, `GET /packaged/pending` (admin) |
+| `rag_retrieve`, `search_guidelines`, `retrieve_evidence`, `ingest_document` | `POST /rag/retrieve`, `/rag/ask`, `/rag/ingest` (admin) |
+
+Kept on purpose: `nutrition_calculator`, `disease_information` and
+`medicine_information` (they add their own framing and disclaimers on top of
+`/rag/ask`), and every local calculator and screening tool. The only code here
+that still calls CNR is `school_age_integrated_screen` (via
+`/bmi-for-age/classify`) and the two education tools, so
+`CHAKUDYA_API_KEY` must be set.
 
 ## Setup
 
@@ -41,6 +66,8 @@ npm run dev
 
 ```bash
 npx wrangler secret put MCP_AUTH_TOKEN
+# required: a chakudya-api consumer key (chakudya-api refuses every data route without a key)
+npx wrangler secret put CHAKUDYA_API_KEY
 # optional, only if you use admin-gated CNR routes:
 npx wrangler secret put CHAKUDYA_ADMIN_API_KEY
 
@@ -64,12 +91,12 @@ layer calling them must treat the output as authoritative.
 | Adults 18+ (not pregnant/postpartum) | `adult_integrated_screen` | NACS (oedema, MUAC, BMI from weight+height, confirmed >10% weight loss), optional MUST on a separate axis |
 | Pregnant / postpartum women | `pregnant_postpartum_integrated_screen` | NACS maternal cut-offs |
 
-Supporting tools: `bmi_for_age_classify` (thin wrapper over the Chakudya API's
-`/bmi-for-age/classify`, 5y 1m – 19y 0m), `must_screen` (BAPEN MUST score),
-`nacs_classify_*`, `who_growth_zscore`.
+Supporting tools: `must_screen` (BAPEN MUST score), `nacs_classify_*`,
+`who_growth_zscore`. For BMI-for-age on its own (5y 1m – 19y 0m) call the
+Chakudya API's `GET /bmi-for-age/classify` directly.
 
-**BMI-for-age and the Chakudya API.** `school_age_integrated_screen` and
-`bmi_for_age_classify` call `GET /bmi-for-age/classify` on the Chakudya API
+**BMI-for-age and the Chakudya API.** `school_age_integrated_screen` calls
+`GET /bmi-for-age/classify` on the Chakudya API
 (WHO 2007 table as printed in Malawi MoH *Eat Well to Live Well*, 2021, Annex 2)
 through the same `CHAKUDYA_API` binding / base URL as the other tools. If that
 call fails, the screening tool falls back to the in-process WHO 2007 LMS
@@ -143,31 +170,12 @@ separate `fentonGrowthTools.ts` alongside this one rather than merging them —
 keep the two standards distinguishable in tool output since they're not
 numerically identical.
 
-## Session memory (memory_write / memory_recall / memory_consolidate)
+## Session memory
 
-The Worker itself holds no state between requests (one fresh `McpServer` per
-HTTP call — see `mcpTransport.ts`), but memory is still real and persistent:
-it's stored server-side in `chakudya-api`'s Supabase `assistant_memory`
-table (Write → Consolidate → Recall → Apply), not in this Worker. That part
-already existed.
-
-What's new: this Worker now mints an `Mcp-Session-Id` on `initialize` (or
-honours one the client already sent) and returns it in the response header,
-per standard MCP Streamable HTTP behaviour. Any spec-compliant client
-(including Claude.ai's own connector) already echoes that header back on
-every later request in the session — so `memory_write`, `memory_recall`,
-and `memory_consolidate` now default their `session_id` argument to it. A
-model driving this MCP server can just call `memory_write("patient is 8
-weeks preterm")` without ever inventing or tracking a session_id itself, and
-`memory_recall` later in the same session picks it back up automatically.
-
-The explicit `session_id` argument still exists and still wins when passed
-— that's what lets a caller deliberately span memory across separate MCP
-sessions (e.g. Thanzi Coach keying memory by WhatsApp phone number instead
-of by MCP session, so a patient's context survives across different
-conversations, not just within one). If neither an explicit `session_id`
-nor an `Mcp-Session-Id` header is available, the memory tools return a clear
-tool error rather than silently writing/reading nothing.
+The `memory_write`, `memory_recall` and `memory_consolidate` tools were removed
+from this server. Session memory lives in `chakudya-api` (Supabase
+`assistant_memory`), so call `POST /memory/write`, `POST /memory/recall` and
+`POST /memory/consolidate` (admin key) there directly.
 
 ## Connecting an MCP client
 

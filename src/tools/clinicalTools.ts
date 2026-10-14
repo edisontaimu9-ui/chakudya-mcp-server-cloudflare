@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { chakudyaClient } from "../clients/chakudyaClient.js";
 import { ok, safeTool } from "../utils/toolResult.js";
 
 // Activity factors for the Mifflin-St Jeor TDEE calculation.
@@ -13,86 +12,6 @@ const ACTIVITY_FACTORS = {
 } as const;
 
 export function registerClinicalTools(server: McpServer) {
-  // ── diabetes_exchange_lookup ─────────────────────────────────────────────
-  server.registerTool(
-    "diabetes_exchange_lookup",
-    {
-      title: "Diabetes Exchange List Lookup",
-      description:
-        "Look up foods in the diabetic exchange list (e.g. UCT-style exchange system) by exchange type " +
-        "(e.g. 'starch', 'fruit', 'meat', 'fat', 'milk', 'vegetable'). Returns exchange portion data for " +
-        "carbohydrate counting / meal planning in diabetes care.",
-      inputSchema: {
-        type: z.string().optional().describe("Exchange category, e.g. 'starch', 'fruit', 'meat', 'fat'"),
-        limit: z.number().int().positive().max(200).optional().default(50),
-        offset: z.number().int().nonnegative().optional().default(0),
-      },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    safeTool("diabetes_exchange_lookup", async ({ type, limit, offset }) => {
-      const res = await chakudyaClient.get("/exchange", { type, limit, offset });
-      return ok(res.data, { count: res.count });
-    })
-  );
-
-  // ── renal_exchange_lookup ────────────────────────────────────────────────
-  server.registerTool(
-    "renal_exchange_lookup",
-    {
-      title: "Renal Exchange List Lookup",
-      description:
-        "Look up foods in the renal diet exchange list (based on the RenalSmart South African exchange " +
-        "system) — potassium, phosphorus, and sodium content relevant to chronic kidney disease / dialysis " +
-        "diets.",
-      inputSchema: {
-        limit: z.number().int().positive().max(200).optional().default(50),
-        offset: z.number().int().nonnegative().optional().default(0),
-      },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    safeTool("renal_exchange_lookup", async ({ limit, offset }) => {
-      const res = await chakudyaClient.get("/renal", { limit, offset });
-      return ok(res.data, { count: res.count });
-    })
-  );
-
-  // ── enteral_formula_lookup ───────────────────────────────────────────────
-  server.registerTool(
-    "enteral_formula_lookup",
-    {
-      title: "Enteral Formula Lookup",
-      description:
-        "Look up enteral/parenteral nutrition formulas by feeding route (e.g. 'oral', 'NG', 'PEG', 'IV'). " +
-        "Returns formula composition (energy density, protein content, etc.) for tube feeding / " +
-        "malnutrition management planning.",
-      inputSchema: {
-        route: z.string().optional().describe("Feeding route, e.g. 'oral', 'NG', 'PEG', 'IV'"),
-        limit: z.number().int().positive().max(200).optional().default(50),
-        offset: z.number().int().nonnegative().optional().default(0),
-      },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    safeTool("enteral_formula_lookup", async ({ route, limit, offset }) => {
-      const res = await chakudyaClient.get("/formulas", { route, limit, offset });
-      return ok(res.data, { count: res.count });
-    })
-  );
-
   // ── nutrition_calculator ─────────────────────────────────────────────────
   server.registerTool(
     "nutrition_calculator",
