@@ -120,8 +120,8 @@ describe("integratedAdultScreen — older adults and 18-year-olds", () => {
   });
 
   it("adds the cross-check note for 18-year-olds only", () => {
-    expect(run({ sex: "male", age: { age_years: 18.5 }, bmi: 20 }).limitations.join(" ")).toMatch(/bmi-for-age\/classify/);
-    expect(run({ sex: "male", age: { age_years: 25 }, bmi: 20 }).limitations.join(" ")).not.toMatch(/bmi-for-age\/classify/);
+    expect(run({ sex: "male", age: { age_years: 18.5 }, bmi: 20 }).limitations.join(" ")).toMatch(/bmi_for_age_classify/);
+    expect(run({ sex: "male", age: { age_years: 25 }, bmi: 20 }).limitations.join(" ")).not.toMatch(/bmi_for_age_classify/);
   });
 });
 

@@ -1,3 +1,6 @@
+import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ok, safeTool } from "../utils/toolResult.js";
 import { chakudyaClient } from "../clients/chakudyaClient.js";
 import type { Severity } from "./nacsClassificationTools.js";
 
@@ -13,9 +16,9 @@ import type { Severity } from "./nacsClassificationTools.js";
  *
  * This file holds:
  *   - fetchBmiForAge(): the single place the MCP server calls that endpoint
- *     (used by schoolAgeScreeningTools.ts, which falls back to the in-process
- *     WHO 2007 LMS z-score if the call fails; there is no standalone MCP tool
- *     for it, call chakudya-api's GET /bmi-for-age/classify directly);
+ *     (used by the bmi_for_age_classify tool below AND by
+ *     schoolAgeScreeningTools.ts, which falls back to the in-process WHO
+ *     2007 LMS z-score if the call fails);
  *   - small pure helpers that map the endpoint's status vocabulary onto the
  *     NACS severity vocabulary the rest of the screening modules use.
  *
@@ -106,4 +109,47 @@ export function bmiForAgeStatusFromWhoLabel(label: string): BmiForAgeStatus | un
     default:
       return undefined;
   }
+}
+
+export function registerBmiForAgeTools(server: McpServer): void {
+  server.registerTool(
+    "bmi_for_age_classify",
+    {
+      title: "BMI-for-age Classification (5-19 years, Chakudya API)",
+      description:
+        "Classify BMI-for-age for a child or adolescent from 5y 1m to 19y 0m (61-228 completed months) using the " +
+        "Chakudya API's /bmi-for-age/classify endpoint: the WHO 2007 BMI-for-age table as printed in the Malawi " +
+        "Ministry of Health guide 'Eat Well to Live Well' (2021), Annex 2. Returns severe thinness (< -3SD), thinness " +
+        "(< -2SD), normal (-2SD to +1SD), overweight (> +1SD) or obesity (> +2SD), plus the exact -3SD..+3SD BMI " +
+        "cut-offs used for that sex and age. Provide age_months plus either bmi, or weight_kg AND height_cm " +
+        "(preferred — the unrounded BMI is compared). For a z-score/percentile use who_growth_zscore with " +
+        "standard bmi_for_age_5_19y; for a full screening workflow (MUAC, oedema, referral action) use " +
+        "school_age_integrated_screen. Screening aid only, not a diagnosis.",
+      inputSchema: {
+        sex: z.enum(["male", "female"]),
+        age_months: z
+          .number()
+          .int()
+          .min(BMI_FOR_AGE_MIN_MONTHS)
+          .max(BMI_FOR_AGE_MAX_MONTHS)
+          .describe("Completed months = years x 12 + months (e.g. 7y 11m = 95). 61-228."),
+        bmi: z.number().positive().optional().describe("BMI in kg/m^2. Omit if weight_kg and height_cm are given."),
+        weight_kg: z.number().positive().optional(),
+        height_cm: z.number().positive().optional(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    safeTool("bmi_for_age_classify", async ({ sex, age_months, bmi, weight_kg, height_cm }) => {
+      const hasWeightHeight = weight_kg !== undefined && height_cm !== undefined;
+      if (!hasWeightHeight && bmi === undefined) {
+        throw new Error("Provide bmi, or both weight_kg and height_cm.");
+      }
+      const data = await fetchBmiForAge({ sex, age_months, bmi, weight_kg, height_cm });
+      return ok(data, {
+        disclaimer:
+          "Screening aid only, not a diagnosis. Classification from the Chakudya API /bmi-for-age/classify " +
+          "(WHO 2007 BMI-for-age, as printed in Malawi MoH 'Eat Well to Live Well' 2021, Annex 2).",
+      });
+    })
+  );
 }

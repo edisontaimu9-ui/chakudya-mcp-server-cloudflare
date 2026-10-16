@@ -522,7 +522,7 @@ export function registerEnergyExpenditureTools(server: McpServer) {
         "Compute total kcal and macronutrient % breakdown from grams of protein, fat, carbohydrate, and " +
         "(optionally) alcohol, using the Atwater factors (4/9/4/7 kcal/g respectively) from " +
         "Nelms/Ireton-Jones Ch.2. Useful for a manually specified recipe or formulated feed, as opposed to " +
-        "chakudya-api's /recipes/calculate which pulls per-100g values from the Chakudya food database.",
+        "calculate_nutrients which pulls per-100g values from the Chakudya food database.",
       inputSchema: {
         protein_g: z.number().nonnegative().default(0),
         fat_g: z.number().nonnegative().default(0),
