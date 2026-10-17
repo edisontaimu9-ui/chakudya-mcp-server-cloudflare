@@ -22,6 +22,8 @@ export interface WorkerBindings {
   MCP_RATE_LIMIT_PER_MIN?: string;
   /** "true" re-enables the legacy ?token= URL fallback. Off by default. */
   MCP_ALLOW_QUERY_TOKEN?: string;
+  /** Max characters of JSON a tool result may carry before lists are truncated. Default 30000. */
+  MCP_MAX_RESULT_CHARS?: string;
   ENVIRONMENT?: string; // "production" | "development" — set via vars if you want dev logging
   /**
    * Service binding to the chakudya-api Worker (see the "services" entry in
@@ -51,6 +53,7 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ?? "").split(",").map((s) => s.trim()).filter(Boolean)),
   MCP_RATE_LIMIT_PER_MIN: z.coerce.number().int().positive().default(60),
+  MCP_MAX_RESULT_CHARS: z.coerce.number().int().min(2000).default(30000),
   MCP_ALLOW_QUERY_TOKEN: z
     .enum(["true", "false"])
     .default("false")

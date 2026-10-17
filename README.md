@@ -57,6 +57,15 @@ https://<your-worker>.workers.dev/mcp?toolset=food,screening
 `all`, or no parameter, means every tool. An unknown name returns a 400 that
 lists the valid ones. Each tool belongs to exactly one toolset.
 
+## Result size cap
+
+Tool results are capped at 30,000 characters of JSON (`MCP_MAX_RESULT_CHARS`, set
+under `vars` in `wrangler.jsonc`, minimum 2000). When a result is longer, the
+largest list in it is cut to the number of items that fit and a `truncated` note
+reports `returned` and `total`, so the model knows to narrow its query. Tools that
+build their own response instead of calling `ok()` (for example the Fenton SVG
+chart) are not capped.
+
 ## Setup
 
 ```bash
