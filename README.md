@@ -33,6 +33,30 @@ to regenerate it.
 **168 tools:** `activity_energy_calculate`, `activity_energy_list`, `adjusted_body_weight_calculator`, `adult_integrated_screen`, `alcohol_kcal_calculator`, `amputation_weight_adjustment_calculator`, `analyze_meal`, `analyze_meal_clinical`, `aspen_refeeding_initiation_guidance`, `aspen_refeeding_risk_adult`, `aspen_refeeding_risk_pediatric`, `aspen_refeeding_syndrome_severity`, `atwater_food_energy_calculator`, `barcode_lookup`, `bmi_classification`, `bmi_for_age_classify`, `burn_energy_requirements`, `burn_fluid_resuscitation_parkland`, `burn_glucose_glycemic_targets`, `burn_hypermetabolism_pharmacologic_dosing`, `burn_indirect_calorimetry_ree`, `burn_micronutrient_dosing`, `burn_nitrogen_balance`, `burn_pediatric_maintenance_fluid_holliday_segar`, `burn_pediatric_predictive_equations_comparison`, `burn_protein_requirements`, `calculate_nutrients`, `calculate_recipe_nutrition`, `carb_containing_foods_reference`, `carbohydrate_content_calculator`, `carbohydrate_requirement_reference`, `cho_fat_ratio_reference`, `clinical_reference_ranges`, `compare_foods_nutrients`, `delete_food_log_entry`, `diabetes_exchange_lookup`, `disease_information`, `dose_adjustment_stepwise_reference`, `dri_compare_intake`, `dri_eer_reference_lookup`, `dri_electrolyte_water_reference`, `dri_fat_soluble_vitamin_reference`, `dri_life_stages`, `dri_lookup`, `dri_macronutrient_reference`, `dri_mineral_trace_element_reference`, `dri_water_soluble_vitamin_reference`, `electrolyte_replacement_reference`, `energy_factors_reference`, `energy_requirements`, `enteral_formula_lookup`, `fat_requirement_reference`, `fenton_preterm_chart`, `fenton_preterm_classify`, `fenton_preterm_growth`, `fenton_preterm_profile`, `fenton_preterm_references`, `fenton_preterm_velocity`, `fever_stress_ree_adjustment`, `fhir_capability_statement`, `fhir_ncp_diagnosis_codes`, `fhir_ncp_operation`, `fhir_questionnaire`, `find_food`, `find_food_substitutes`, `food_convert`, `food_energy_calculate`, `foods_autocomplete`, `foods_by_category`, `foods_categories`, `generate_nutrition_label`, `get_food_details`, `get_food_log_summary`, `get_food_serving_sizes`, `glim_etiology_classification`, `glim_malnutrition_diagnosis`, `glim_malnutrition_severity`, `glycaemic_index_reference`, `growth_assess`, `handy_carb_measures_reference`, `harris_benedict_bee_calculator`, `ibw_ubw_nutritional_risk_interpreter`, `icu_fluid_requirement_calculator`, `indication_based_energy_protein_reference`, `ingest_document`, `insulin_types_reference`, `intergrowth_preterm_postnatal_growth_zscore`, `iom_dri_eer_calculator`, `list_drug_nutrient_interactions`, `list_favorites`, `list_food_log`, `list_pending_packaged_foods`, `list_view_history`, `log_food_entry`, `log_view`, `macronutrient_distribution_check`, `mealtime_insulin_dose_calculator`, `measures_catalog`, `measures_convert`, `medicine_information`, `memory_consolidate`, `memory_recall`, `memory_write`, `met_activity_energy_calculator`, `muac_cutoff_cmam_2017`, `must_screen`, `nacs_classify_adult`, `nacs_classify_children_0_59m`, `nacs_classify_children_5_17y`, `nacs_classify_pregnant_postpartum`, `nitrogen_balance_calculator`, `npe_nitrogen_ratio_calculator`, `nutrition_calculator`, `nutrition_requirement_weight_selection`, `nutrition_status_classification`, `oedema_ascites_weight_adjustment_reference`, `packaged_food_search`, `parse_ingredients_text`, `pediatric_activity_stress_factor_reference`, `pediatric_energy_requirements`, `pediatric_enteral_feed_advancement`, `pediatric_enteral_feed_plan`, `pediatric_fluid_requirements`, `pediatric_growth_velocity`, `pediatric_growth_velocity_assessment`, `pediatric_protein_requirements`, `percent_ideal_body_weight_calculator`, `percent_usual_body_weight`, `percent_weight_change_calculator`, `pnst_screen`, `potassium_deficit_estimator`, `pregnant_postpartum_integrated_screen`, `preterm_fluid_energy_requirements`, `propofol_fat_content_calculator`, `protein_requirement_by_stress_level`, `pyms_screen`, `rag_retrieve`, `remove_favorite`, `renal_exchange_lookup`, `respiratory_quotient_interpreter`, `retrieve_evidence`, `save_favorite`, `school_age_integrated_screen`, `search_drug_nutrient_interactions`, `search_food`, `search_foods_advanced`, `search_guidelines`, `sga_contributing_factor_classification`, `sga_physical_exam_reference`, `sga_rating_classification`, `spinal_cord_injury_ibw_adjustment_reference`, `stamp_screen`, `stature_from_demi_span`, `stature_from_knee_height`, `stature_from_ulna_length`, `stress_factor_reference`, `strongkids_screen`, `submit_packaged_food`, `submit_packaged_food_photo`, `tee_activity_band_estimator`, `twenty_four_hour_energy_adjustment_reference`, `under5_anthropometric_assessment`, `under5_integrated_screen`, `waist_circumference_interpretation`, `weight_change_significance_interpreter`, `weight_estimate_persons_65_and_older`, `weight_from_knee_height_and_mac`, `who_growth_zscore`
 <!-- TOOLS:END -->
 
+## Toolsets
+
+By default a connection gets every tool. To load fewer (smaller context, less
+confusion for the model), add `?toolset=` to the MCP URL with one or more names,
+comma separated:
+
+```
+https://<your-worker>.workers.dev/mcp?toolset=food,screening
+```
+
+| Toolset | What it covers |
+|---|---|
+| `food` | Food composition lookups, packaged foods, recipes, meals, measures, food comparison |
+| `user` | Food log, favourites, history, session memory |
+| `knowledge` | RAG search over guidelines, evidence retrieval, education tools |
+| `energy` | Energy and protein requirements, energy expenditure, critical care nutrition support |
+| `clinical` | Adult clinical calculators, body weight and stature, reference ranges, DRI, malnutrition diagnosis, refeeding, diabetes, drug interactions, FHIR |
+| `screening` | Malnutrition screening by population |
+| `paediatric` | Paediatric assessment, WHO/INTERGROWTH/Fenton growth, BMI-for-age |
+| `burns` | Burn nutrition, adult and paediatric |
+
+`all`, or no parameter, means every tool. An unknown name returns a 400 that
+lists the valid ones. Each tool belongs to exactly one toolset.
+
 ## Setup
 
 ```bash

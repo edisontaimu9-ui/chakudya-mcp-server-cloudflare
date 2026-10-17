@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { isInitializeRequest, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { initEnv, getEnv, type WorkerBindings } from "./config/env.js";
 import { logger } from "./utils/logger.js";
+import { parseToolsets, TOOLSET_NAMES } from "./server/toolsets.js";
 import { createChakudyaMcpServer } from "./server/createServer.js";
 import { requireAuth, rateLimit } from "./server/security.js";
 import { handleOAuthRoute } from "./server/oauth.js";
@@ -97,11 +98,26 @@ async function handleMcpRequest(req: Request): Promise<Response> {
     return res;
   };
 
+  // Optional ?toolset=food,screening narrows which tools this connection exposes
+  // (default: all). Unknown names are rejected rather than silently ignored, so a
+  // typo can't quietly leave a client with no tools.
+  const { selected: toolsets, unknown } = parseToolsets(new URL(req.url).searchParams.get("toolset"));
+  if (unknown.length > 0) {
+    return Response.json(
+      {
+        jsonrpc: "2.0",
+        error: { code: -32602, message: `Unknown toolset: ${unknown.join(", ")}. Valid: all, ${TOOLSET_NAMES.join(", ")}.` },
+        id: null,
+      },
+      { status: 400 }
+    );
+  }
+
   const transport = new OneShotTransport();
   let server: McpServer | undefined;
 
   try {
-    server = createChakudyaMcpServer(sessionId);
+    server = createChakudyaMcpServer(sessionId, toolsets);
     await server.connect(transport as any);
 
     const response = await transport.handle(body);
