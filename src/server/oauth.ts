@@ -1,5 +1,6 @@
 import { getEnv } from "../config/env.js";
 import { logger } from "../utils/logger.js";
+import { safeEqual } from "../utils/safeEqual.js";
 
 /**
  * Fetch-API port of the Render version's Express oauthRouter — same
@@ -221,6 +222,17 @@ export async function handleOAuthRoute(req: Request): Promise<Response | null> {
     }
 
     if (grantType === "refresh_token") {
+      if (!env.MCP_AUTH_TOKEN) {
+        return json({ error: "server_error", error_description: "Server misconfigured" }, 500);
+      }
+      // The refresh token we hand out is MCP_AUTH_TOKEN itself, so a valid
+      // refresh request must present exactly that. Previously this branch
+      // returned the token to anyone who asked for it.
+      const presented = typeof body.refresh_token === "string" ? body.refresh_token : "";
+      if (!presented || !safeEqual(presented, env.MCP_AUTH_TOKEN)) {
+        logger.warn("oauth_refresh_rejected", { grantType });
+        return json({ error: "invalid_grant", error_description: "Invalid refresh token" }, 400);
+      }
       logger.info("oauth_token_refreshed", { grantType });
       return json({
         access_token: env.MCP_AUTH_TOKEN,

@@ -1,5 +1,6 @@
 import { getEnv } from "../config/env.js";
 import { logger } from "../utils/logger.js";
+import { safeEqual } from "../utils/safeEqual.js";
 
 /**
  * Fetch-API equivalents of the Express requireAuth/rateLimit middleware from
@@ -38,7 +39,7 @@ export function requireAuth(req: Request): Response | null {
 
   const token = match?.[1] ?? queryToken;
 
-  if (!token || token !== env.MCP_AUTH_TOKEN) {
+  if (!token || !safeEqual(token, env.MCP_AUTH_TOKEN)) {
     logger.warn("mcp_auth_rejected", { path: url.pathname });
 
     const issuer = `${url.protocol}//${url.host}`;
