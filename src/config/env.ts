@@ -33,6 +33,12 @@ export interface WorkerBindings {
    * is undefined.
    */
   CHAKUDYA_API?: Fetcher;
+  /**
+   * Workers Rate Limiting binding (the "ratelimits" entry in wrangler.jsonc).
+   * Shared by every isolate in a Cloudflare location, unlike the in-memory
+   * fallback in security.ts. Optional: absent in tests and plain local dev.
+   */
+  MCP_LIMITER?: RateLimit;
 }
 
 const EnvSchema = z.object({
@@ -56,6 +62,7 @@ export type AppEnv = z.infer<typeof EnvSchema>;
 
 let cached: AppEnv | undefined;
 let cachedServiceBinding: Fetcher | undefined;
+let cachedRateLimiter: RateLimit | undefined;
 
 /** Call once at the top of the fetch handler, before anything else touches config. */
 export function initEnv(raw: WorkerBindings): AppEnv {
@@ -80,6 +87,7 @@ export function initEnv(raw: WorkerBindings): AppEnv {
 
   cached = parsed.data;
   cachedServiceBinding = raw.CHAKUDYA_API;
+  cachedRateLimiter = raw.MCP_LIMITER;
   return cached;
 }
 
@@ -98,4 +106,9 @@ export function getEnv(): AppEnv {
  */
 export function getChakudyaApiBinding(): Fetcher | undefined {
   return cachedServiceBinding;
+}
+
+/** The Workers Rate Limiting binding, if configured. Undefined means use the in-memory fallback. */
+export function getRateLimiterBinding(): RateLimit | undefined {
+  return cachedRateLimiter;
 }

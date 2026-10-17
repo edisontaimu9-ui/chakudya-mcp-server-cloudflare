@@ -53,7 +53,7 @@ async function handleMcpRequest(req: Request): Promise<Response> {
   const authRejection = requireAuth(req);
   if (authRejection) return authRejection;
 
-  const rateRejection = rateLimit(req);
+  const rateRejection = await rateLimit(req);
   if (rateRejection) return rateRejection;
 
   let body: JSONRPCMessage;

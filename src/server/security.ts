@@ -1,4 +1,4 @@
-import { getEnv } from "../config/env.js";
+import { getEnv, getRateLimiterBinding } from "../config/env.js";
 import { logger } from "../utils/logger.js";
 import { safeEqual } from "../utils/safeEqual.js";
 
@@ -83,10 +83,47 @@ export function requireAuth(req: Request): Response | null {
 const hits = new Map<string, { count: number; resetAt: number }>();
 const windowMs = 60_000;
 
-export function rateLimit(req: Request): Response | null {
-  const env = getEnv();
-  // CF-Connecting-IP is Cloudflare's equivalent of Express's req.ip.
+function tooManyRequests(retryAfterSec: number): Response {
+  return new Response(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      error: { code: -32002, message: "Rate limit exceeded for this MCP server. Try again shortly." },
+      id: null,
+    }),
+    {
+      status: 429,
+      headers: { "Content-Type": "application/json", "Retry-After": String(retryAfterSec) },
+    }
+  );
+}
+
+/**
+ * Rate limit by client IP. Uses the Workers Rate Limiting binding when it is
+ * configured (state shared across isolates within a Cloudflare location, so a
+ * burst can't dodge the limit by landing on a fresh isolate). If the binding is
+ * absent, or the call to it throws, falls back to the in-memory limiter below
+ * rather than failing open.
+ *
+ * Note the binding's limit is set in wrangler.jsonc ("ratelimits"), not by
+ * MCP_RATE_LIMIT_PER_MIN, which only drives the in-memory fallback. Keep the
+ * two numbers equal. The binding is per location, not a single global counter.
+ */
+export async function rateLimit(req: Request): Promise<Response | null> {
   const key = req.headers.get("cf-connecting-ip") ?? "unknown";
+  const binding = getRateLimiterBinding();
+  if (binding) {
+    try {
+      const { success } = await binding.limit({ key });
+      return success ? null : tooManyRequests(60);
+    } catch (e) {
+      logger.error("rate_limiter_binding_failed", { message: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return rateLimitInMemory(key);
+}
+
+function rateLimitInMemory(key: string): Response | null {
+  const env = getEnv();
   const now = Date.now();
   const entry = hits.get(key);
 
@@ -98,18 +135,7 @@ export function rateLimit(req: Request): Response | null {
 
   entry.count += 1;
   if (entry.count > env.MCP_RATE_LIMIT_PER_MIN) {
-    const retryAfterSec = Math.ceil((entry.resetAt - now) / 1000);
-    return new Response(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        error: { code: -32002, message: "Rate limit exceeded for this MCP server. Try again shortly." },
-        id: null,
-      }),
-      {
-        status: 429,
-        headers: { "Content-Type": "application/json", "Retry-After": String(retryAfterSec) },
-      }
-    );
+    return tooManyRequests(Math.ceil((entry.resetAt - now) / 1000));
   }
 
   return null;

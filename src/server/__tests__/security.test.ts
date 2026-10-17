@@ -4,6 +4,7 @@ const envState: { ENVIRONMENT: string; MCP_AUTH_TOKEN?: string; MCP_ALLOW_QUERY_
 
 vi.mock("../../config/env.js", () => ({
   getEnv: () => ({ ...envState, MCP_RATE_LIMIT_PER_MIN: 60 }),
+  getRateLimiterBinding: () => undefined,
 }));
 
 import { requireAuth } from "../security.js";
