@@ -25,13 +25,12 @@ the Render version. This version has dropped the CNR wrapper tools (below).
 
 ## What lives in CNR, not here
 
-Tools that only forwarded a request to a CNR endpoint were removed so there is
-one implementation, in CNR. Call these on chakudya-api directly, with a
+Most tools that only forwarded a request to a CNR endpoint were removed so there
+is one implementation, in CNR (the food lookup tools below are the exception). Call these on chakudya-api directly, with a
 consumer API key (`Authorization: Bearer <key>`):
 
 | Removed MCP tools | Use this CNR route instead |
 |---|---|
-| `search_food`, `get_food_details`, `barcode_lookup`, `foods_autocomplete`, `foods_categories`, `get_food_serving_sizes`, `generate_nutrition_label`, `packaged_food_search` | `GET /foods`, `/foods/lookup`, `/foods/search`, `/foods/{id}`, `/foods/autocomplete`, `/foods/categories`, `/foods/{id}/label`, `/packaged` |
 | `calculate_nutrients`, `analyze_meal`, `calculate_recipe_nutrition`, `analyze_meal_clinical`, `parse_ingredients_text` | `POST /recipes/calculate`, `/meals/analyze`, `/ingredients/parse` |
 | `find_food_substitutes`, `compare_foods_nutrients` | `GET /foods/substitutes`, `/foods/compare` |
 | `diabetes_exchange_lookup`, `renal_exchange_lookup`, `enteral_formula_lookup`, `glycaemic_index_reference`, `list_drug_nutrient_interactions`, `search_drug_nutrient_interactions` | `GET /exchange`, `/renal`, `/formulas`, `/glycaemic-index`, `/drug-interactions[/search]` |
@@ -42,7 +41,23 @@ consumer API key (`Authorization: Bearer <key>`):
 | `submit_packaged_food`, `submit_packaged_food_photo`, `list_pending_packaged_foods` | `POST /packaged/submit`, `/packaged/scan`, `GET /packaged/pending` (admin) |
 | `rag_retrieve`, `search_guidelines`, `retrieve_evidence`, `ingest_document` | `POST /rag/retrieve`, `/rag/ask`, `/rag/ingest` (admin) |
 
-Kept on purpose: `nutrition_calculator`, `disease_information` and
+Kept as MCP tools (they call CNR through `CHAKUDYA_API_KEY`, implemented in
+`src/tools/foodTools.ts`): `search_food`, `get_food_details`, `barcode_lookup`,
+`foods_autocomplete`, `foods_categories`, `get_food_serving_sizes`,
+`generate_nutrition_label`, `packaged_food_search`.
+
+| Tool | CNR route it calls |
+|---|---|
+| `search_food` | `GET /foods`, then `/foods/search`, then `/foods/lookup` |
+| `get_food_details` | `GET /foods/{id}` |
+| `barcode_lookup` | `GET /packaged`, then `/foods/lookup` |
+| `packaged_food_search` | `GET /packaged` |
+| `foods_autocomplete` | `GET /foods/autocomplete` |
+| `foods_categories` | `GET /foods/categories` |
+| `get_food_serving_sizes` | `GET /foods/{id}?with_servings=true` |
+| `generate_nutrition_label` | `GET /foods/{id}/label` |
+
+Also kept on purpose: `nutrition_calculator`, `disease_information` and
 `medicine_information` (they add their own framing and disclaimers on top of
 `/rag/ask`), and every local calculator and screening tool. The only code here
 that still calls CNR is `school_age_integrated_screen` (via
