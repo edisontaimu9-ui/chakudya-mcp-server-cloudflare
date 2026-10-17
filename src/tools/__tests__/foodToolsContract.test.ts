@@ -147,6 +147,27 @@ describe("foods_local_categories and foods_by_category", () => {
   });
 });
 
+describe("search_baby_foods", () => {
+  it("calls /foods/baby-foods with the search text and a limit", async () => {
+    routes["/foods/baby-foods"] = { body: okBody([food(230, "Baby cereal, banana")], { count: 1 }) };
+    const { json } = await call("search_baby_foods", { query: "banana" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ path: "/foods/baby-foods", query: { search: "banana", limit: "20" } });
+    expect(json().data).toHaveLength(1);
+  });
+
+  it("lists everything when no query is given", async () => {
+    routes["/foods/baby-foods"] = { body: okBody([], { count: 0 }) };
+    await call("search_baby_foods", {});
+    expect(calls[0].query).toEqual({ limit: "20" });
+  });
+
+  it("is mentioned by search_food so models know where baby foods went", async () => {
+    const server = createChakudyaMcpServer("d", ["food"]) as unknown as { _registeredTools: Record<string, { description?: string }> };
+    expect(server._registeredTools["search_food"].description).toMatch(/search_baby_foods/);
+  });
+});
+
 describe("get_food_serving_sizes", () => {
   it("asks for the food with with_servings=true", async () => {
     routes["/foods/7"] = { body: okBody({ ...food(7, "Rice"), servings: [{ label: "1 cup", grams: 180 }] }) };

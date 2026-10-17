@@ -8,6 +8,7 @@ import { ok, safeTool } from "../utils/toolResult.js";
  *  - find_food: GET /foods/lookup, the intent-aware best match (e.g. a bare "rice" favours cooked), per-100 g
  *    values, with alternates when the match is not confident;
  *  - foods_local_categories: GET /foods/local-categories (category names the local table uses);
+ *  - search_baby_foods: GET /foods/baby-foods (baby/infant rows, kept out of plain name searches);
  *  - foods_by_category: GET /foods/by-category browse;
  *  - search_foods_advanced: GET /foods/search with brand and ingredient filters (typo/synonym tolerant,
  *    Chichewa <-> English aliases such as chinangwa/cassava).
@@ -75,6 +76,26 @@ export function registerFoodLookupTools(server: McpServer) {
     safeTool("foods_by_category", async ({ category, max_results }) => {
       const res = await chakudyaClient.get("/foods/by-category", { category, max_results });
       return ok(res.data ?? res, { count: res.count, category });
+    })
+  );
+
+  server.registerTool(
+    "search_baby_foods",
+    {
+      title: "Search Baby and Infant Foods",
+      description:
+        "Search or list only the baby and infant foods (infant cereals, jarred baby food) in the local table. " +
+        "search_food and find_food leave these out of ordinary name searches so they don't crowd out regular foods; use this tool when you want them. " +
+        "Leave query empty to list them all.",
+      inputSchema: {
+        query: z.string().optional(),
+        max_results: z.number().int().min(1).max(100).optional().default(20),
+      },
+      annotations: READ,
+    },
+    safeTool("search_baby_foods", async ({ query, max_results }) => {
+      const res = await chakudyaClient.get("/foods/baby-foods", { search: query, limit: max_results });
+      return ok(res.data ?? res, { count: res.count });
     })
   );
 

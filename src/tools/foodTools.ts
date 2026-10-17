@@ -71,7 +71,7 @@ export function registerFoodTools(server: McpServer) {
     {
       title: "Search Food",
       description:
-        "Find CANDIDATE foods by name; returns a list with ids. For ONE best-match food with per-100 g values use find_food; to filter by brand, ingredient or category use search_foods_advanced. " +
+        "Find CANDIDATE foods by name; returns a list with ids. Baby and infant products are left out unless the query has a baby word; use search_baby_foods for those. For ONE best-match food with per-100 g values use find_food; to filter by brand, ingredient or category use search_foods_advanced. " +
         "Searches the Chakudya Nutrition Registry (Malawi food composition database). Three tiers, " +
         "same order as the Chakudya API's own internal lookup cascade: (1) exact/substring match in the " +
         "local database, (2) typo-tolerant fuzzy match against the local database (handles misspellings " +
