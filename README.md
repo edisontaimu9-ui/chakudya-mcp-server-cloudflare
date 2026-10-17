@@ -89,6 +89,11 @@ npx wrangler secret put CHAKUDYA_ADMIN_API_KEY
 npm run deploy
 ```
 
+**Token in the URL is off by default.** The old `?token=` fallback is disabled
+because URLs leak into logs and history. Use `Authorization: Bearer <token>` or
+OAuth. If a client can do neither, set `MCP_ALLOW_QUERY_TOKEN` to `"true"` under
+`vars` in `wrangler.jsonc`.
+
 Non-secret config (`CHAKUDYA_API_BASE_URL`, `MCP_ALLOWED_ORIGINS`,
 `MCP_RATE_LIMIT_PER_MIN`) is set in `wrangler.jsonc` under `vars` — edit that
 file directly rather than using `wrangler secret put` for those.

@@ -32,10 +32,16 @@ export function requireAuth(req: Request): Response | null {
   const header = req.headers.get("authorization") ?? "";
   const match = header.match(/^Bearer\s+(.+)$/i);
 
-  // Same fallback as the Render version: MCP clients whose UI only supports
-  // OAuth and can't set a custom Authorization header can pass ?token=...
+  // Legacy fallback for MCP clients that can't set an Authorization header:
+  // ?token=... in the URL. Off by default, because URLs end up in access logs,
+  // browser history and screenshots, so the secret leaks. Set
+  // MCP_ALLOW_QUERY_TOKEN=true only if a client truly needs it; prefer the
+  // header or the OAuth flow.
   const url = new URL(req.url);
-  const queryToken = url.searchParams.get("token") ?? undefined;
+  const queryToken = env.MCP_ALLOW_QUERY_TOKEN ? url.searchParams.get("token") ?? undefined : undefined;
+  if (queryToken && !match) {
+    logger.warn("mcp_query_token_used", { path: url.pathname });
+  }
 
   const token = match?.[1] ?? queryToken;
 
