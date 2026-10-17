@@ -82,7 +82,7 @@ export function registerFoodTools(server: McpServer) {
         "calculate_nutrients.",
       inputSchema: {
         query: z.string().min(1).describe("Food name to search for, e.g. 'nsima' or 'banana'"),
-        category: z.string().optional().describe("Optional category filter — only applies to the exact/substring tier"),
+        category: z.string().optional().describe("Optional category filter, a name from foods_local_categories (e.g. Staples) — only applies to the exact/substring tier"),
         limit: z.number().int().positive().max(100).optional().default(10),
       },
       annotations: {
@@ -396,7 +396,9 @@ export function registerFoodTools(server: McpServer) {
     {
       title: "Food Category List",
       description:
-        "List the standard food category reference list (near-static, cached 24h server-side), from the " +
+        "List FatSecret's generic food category list (e.g. Fruit, Fast Food). These names do NOT match the local Malawi table: " +
+        "for category names to use with search_food or foods_by_category call foods_local_categories instead. " +
+        "Near-static, cached 24h server-side, from the " +
         "registry's FatSecret-backed tier — returns a 503-derived error on deployments without " +
         "FATSECRET_CONSUMER_KEY/SECRET configured on a Premier or Premier Free plan.",
       inputSchema: {},

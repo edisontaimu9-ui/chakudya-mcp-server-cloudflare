@@ -7,6 +7,7 @@ import { ok, safeTool } from "../utils/toolResult.js";
  * Food-composition lookups on chakudya-api that the older search_food/get_food_details tools do not use:
  *  - find_food: GET /foods/lookup, the intent-aware best match (e.g. a bare "rice" favours cooked), per-100 g
  *    values, with alternates when the match is not confident;
+ *  - foods_local_categories: GET /foods/local-categories (category names the local table uses);
  *  - foods_by_category: GET /foods/by-category browse;
  *  - search_foods_advanced: GET /foods/search with brand and ingredient filters (typo/synonym tolerant,
  *    Chichewa <-> English aliases such as chinangwa/cassava).
@@ -44,10 +45,27 @@ export function registerFoodLookupTools(server: McpServer) {
   );
 
   server.registerTool(
+    "foods_local_categories",
+    {
+      title: "List Local Food Categories",
+      description:
+        "List the category names the local Malawi food table really uses (for example Staples, Animal, Baby foods), each with a food count. " +
+        "Use these names for foods_by_category and for the category filter on search_food and search_foods_advanced. " +
+        "Do NOT use foods_categories for that: it is FatSecret's separate list and its names don't match the local table.",
+      inputSchema: {},
+      annotations: READ,
+    },
+    safeTool("foods_local_categories", async () => {
+      const res = await chakudyaClient.get<{ name: string; count: number }[]>("/foods/local-categories");
+      return ok(res.data ?? [], { count: res.count });
+    })
+  );
+
+  server.registerTool(
     "foods_by_category",
     {
       title: "Browse Foods by Category",
-      description: "List foods in one Chakudya food category (no search text needed), e.g. a cereal, legume or vegetable category. Use foods_categories if you need the category list. To narrow a category by name use search_foods_advanced.",
+      description: "List foods in one local Malawi food category (no search text needed), e.g. Staples or Animal. Get valid category names from foods_local_categories, not foods_categories (a different list). To narrow a category by name use search_foods_advanced.",
       inputSchema: {
         category: z.string().min(1),
         max_results: z.number().int().min(1).max(100).optional().default(20),

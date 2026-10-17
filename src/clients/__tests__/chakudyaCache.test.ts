@@ -88,7 +88,8 @@ describe("cacheTtlMs", () => {
     expect(cacheTtlMs("/foods/categories")).toBe(86_400_000);
     expect(cacheTtlMs("/foods/42")).toBe(3_600_000);
     expect(cacheTtlMs("/foods/42/label")).toBe(3_600_000);
-    for (const p of ["/foods", "/foods/search", "/foods/lookup", "/foods/autocomplete", "/packaged", "/memory/x", "/rag/ask"]) {
+    expect(cacheTtlMs("/foods/local-categories")).toBe(3_600_000);
+    for (const p of ["/foods", "/foods/search", "/foods/lookup", "/foods/autocomplete", "/foods/by-category", "/foods/substitutes", "/foods/abc", "/packaged", "/memory/x", "/rag/ask"]) {
       expect(cacheTtlMs(p), p).toBe(0);
     }
   });

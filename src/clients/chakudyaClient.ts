@@ -76,7 +76,6 @@ function buildUrl(path: string, params?: Record<string, string | number | boolea
 // per isolate (see TtlCache), keyed by path plus sorted query string.
 const resultCache = new TtlCache<unknown>(300);
 const CATEGORIES_TTL_MS = 24 * 60 * 60 * 1000;
-const NON_ID_FOOD_ROUTES = new Set(["categories", "search", "lookup", "autocomplete", "convert", "compare"]);
 
 /** Returns the cache lifetime for a GET path, or 0 if it must not be cached. */
 export function cacheTtlMs(path: string): number {
@@ -88,8 +87,9 @@ export function cacheTtlMs(path: string): number {
   }
   if (ttlSeconds <= 0) return 0;
   if (path === "/foods/categories") return CATEGORIES_TTL_MS;
-  const m = path.match(/^\/foods\/([^/]+)(\/label)?$/);
-  if (m && !NON_ID_FOOD_ROUTES.has(m[1])) return ttlSeconds * 1000;
+  // Single food by numeric id (and its label). Named routes such as /foods/by-category or
+  // /foods/search are deliberately not matched.
+  if (/^\/foods\/\d+(\/label)?$/.test(path) || path === "/foods/local-categories") return ttlSeconds * 1000;
   return 0;
 }
 

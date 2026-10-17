@@ -125,6 +125,28 @@ describe("foods_categories", () => {
   });
 });
 
+describe("foods_local_categories and foods_by_category", () => {
+  it("lists the local category names from /foods/local-categories, not FatSecret's list", async () => {
+    routes["/foods/local-categories"] = { body: okBody([{ name: "Staples", count: 90 }, { name: "Animal", count: 30 }], { count: 2 }) };
+    const { json } = await call("foods_local_categories", {});
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ path: "/foods/local-categories", query: {} });
+    expect(json().data.map((c: { name: string }) => c.name)).toEqual(["Staples", "Animal"]);
+  });
+
+  it("browses a category through /foods/by-category", async () => {
+    routes["/foods/by-category"] = { body: okBody([food(9, "Nsima")], { count: 1 }) };
+    await call("foods_by_category", { category: "Staples" });
+    expect(calls[0]).toMatchObject({ path: "/foods/by-category", query: { category: "Staples", max_results: "20" } });
+  });
+
+  it("steers models away from the FatSecret list in the descriptions", async () => {
+    const server = createChakudyaMcpServer("d", ["food"]) as unknown as { _registeredTools: Record<string, { description?: string }> };
+    expect(server._registeredTools["foods_categories"].description).toMatch(/foods_local_categories/);
+    expect(server._registeredTools["foods_by_category"].description).toMatch(/foods_local_categories/);
+  });
+});
+
 describe("get_food_serving_sizes", () => {
   it("asks for the food with with_servings=true", async () => {
     routes["/foods/7"] = { body: okBody({ ...food(7, "Rice"), servings: [{ label: "1 cup", grams: 180 }] }) };
