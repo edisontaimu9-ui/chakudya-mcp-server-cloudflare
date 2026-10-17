@@ -4,6 +4,7 @@ import { initEnv, getEnv, type WorkerBindings } from "./config/env.js";
 import { logger } from "./utils/logger.js";
 import { parseToolsets, TOOLSET_NAMES } from "./server/toolsets.js";
 import { createChakudyaMcpServer } from "./server/createServer.js";
+import { VERSION } from "./version.js";
 import { requireAuth, rateLimit } from "./server/security.js";
 import { handleOAuthRoute } from "./server/oauth.js";
 import { OneShotTransport } from "./server/mcpTransport.js";
@@ -40,7 +41,7 @@ function corsHeaders(req: Request): HeadersInit {
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Headers": `Content-Type, Authorization, ${SESSION_ID_HEADER}`,
-    "Access-Control-Expose-Headers": SESSION_ID_HEADER,
+    "Access-Control-Expose-Headers": `${SESSION_ID_HEADER}, X-Request-Id`,
   };
 }
 
@@ -50,7 +51,7 @@ function withCors(res: Response, req: Request): Response {
   return res;
 }
 
-async function handleMcpRequest(req: Request): Promise<Response> {
+async function handleMcpRequest(req: Request, requestId: string): Promise<Response> {
   const authRejection = requireAuth(req);
   if (authRejection) return authRejection;
 
@@ -117,7 +118,7 @@ async function handleMcpRequest(req: Request): Promise<Response> {
   let server: McpServer | undefined;
 
   try {
-    server = createChakudyaMcpServer(sessionId, toolsets);
+    server = createChakudyaMcpServer(sessionId, toolsets, { requestId });
     await server.connect(transport as any);
 
     const response = await transport.handle(body);
@@ -128,7 +129,7 @@ async function handleMcpRequest(req: Request): Promise<Response> {
     }
     return attachSessionHeader(Response.json(response));
   } catch (e) {
-    logger.error("mcp_request_error", { error: e instanceof Error ? e.message : String(e) });
+    logger.error("mcp_request_error", { requestId, error: e instanceof Error ? e.message : String(e) });
     return attachSessionHeader(
       Response.json(
         { jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null },
@@ -140,8 +141,12 @@ async function handleMcpRequest(req: Request): Promise<Response> {
   }
 }
 
-export default {
-  async fetch(request: Request, env: WorkerBindings): Promise<Response> {
+/**
+ * Every response carries X-Request-Id (Cloudflare's cf-ray when present, else a
+ * random id). The same id appears on the request's log lines, so a client's
+ * failed call can be traced in `wrangler tail`.
+ */
+async function handle(request: Request, env: WorkerBindings, requestId: string): Promise<Response> {
     try {
       initEnv(env);
     } catch (e) {
@@ -157,7 +162,7 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/health") {
       return withCors(
-        Response.json({ status: "ok", service: "chakudya-mcp-server-cloudflare", time: new Date().toISOString() }),
+        Response.json({ status: "ok", service: "chakudya-mcp-server-cloudflare", version: VERSION, time: new Date().toISOString() }),
         request
       );
     }
@@ -170,7 +175,7 @@ export default {
 
     if (url.pathname === "/mcp") {
       if (request.method === "POST") {
-        return withCors(await handleMcpRequest(request), request);
+        return withCors(await handleMcpRequest(request, requestId), request);
       }
       // No standing session to stream over or tear down in stateless mode —
       // see mcpTransport.ts. Clients that only ever POST (every mainstream
@@ -187,5 +192,25 @@ export default {
     }
 
     return withCors(new Response("Not found", { status: 404 }), request);
+}
+
+export default {
+  async fetch(request: Request, env: WorkerBindings): Promise<Response> {
+    const requestId = request.headers.get("cf-ray") ?? crypto.randomUUID();
+    const start = Date.now();
+    const res = await handle(request, env, requestId);
+    // Response objects from some paths have immutable headers; copy if needed.
+    let out = res;
+    try {
+      out.headers.set("X-Request-Id", requestId);
+    } catch {
+      out = new Response(res.body, res);
+      out.headers.set("X-Request-Id", requestId);
+    }
+    const { pathname } = new URL(request.url);
+    if (pathname !== "/health") {
+      logger.info("request", { requestId, method: request.method, path: pathname, status: out.status, ms: Date.now() - start });
+    }
+    return out;
   },
 };

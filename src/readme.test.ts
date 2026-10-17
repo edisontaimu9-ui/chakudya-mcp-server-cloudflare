@@ -52,3 +52,11 @@ describe("README tool list", () => {
     ).toEqual({ missingFromReadme: [], listedButNotRegistered: [] });
   });
 });
+
+describe("version", () => {
+  it("src/version.ts matches package.json", async () => {
+    const { VERSION } = await import("./version.js");
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    expect(VERSION).toBe(pkg.version);
+  });
+});

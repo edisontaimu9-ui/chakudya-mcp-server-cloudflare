@@ -1,6 +1,6 @@
 {
   "name": "chakudya-mcp-server-cloudflare",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP server exposing the Chakudya Nutrition Registry (CNR) API as MCP tools over Streamable HTTP — Cloudflare Workers edition. Same tools as the Render/Express version; deployed separately.",
   "license": "MIT",
   "type": "module",

@@ -66,6 +66,21 @@ reports `returned` and `total`, so the model knows to narrow its query. Tools th
 build their own response instead of calling `ok()` (for example the Fenton SVG
 chart) are not capped.
 
+## Logging and tracing
+
+Every response has an `X-Request-Id` header (Cloudflare's `cf-ray` when present,
+otherwise a random id). Logs are JSON lines you can follow with `npm run tail`:
+
+- `request`: one per request with `requestId`, `method`, `path`, `status` and
+  `ms` (`/health` is not logged).
+- `tool_call`: one per tool call with `tool`, `ms`, `isError`, `requestId` and
+  `sessionId`. Tool arguments and results are never logged, because they can
+  hold a user's food log or memory text.
+
+To trace a failed call, take the `X-Request-Id` from the client and search the
+logs for it. `/health` and the MCP handshake report the server version from
+`src/version.ts`, which must match `package.json` (a test checks this).
+
 ## Setup
 
 ```bash
