@@ -11,7 +11,22 @@ import { logger } from "../utils/logger.js";
 
 export function requireAuth(req: Request): Response | null {
   const env = getEnv();
-  if (!env.MCP_AUTH_TOKEN) return null; // dev-only escape hatch, same as Render version
+  if (!env.MCP_AUTH_TOKEN) {
+    // The unauthenticated escape hatch is for local `wrangler dev` only. Anywhere
+    // else a missing token means misconfiguration, so refuse to serve rather than
+    // expose every tool. (initEnv() already blocks this at startup in production;
+    // this is the second layer if that check is ever bypassed or changed.)
+    if (env.ENVIRONMENT === "development") return null;
+    logger.error("mcp_auth_token_missing", { path: new URL(req.url).pathname });
+    return new Response(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        error: { code: -32003, message: "Server misconfigured: authentication is not set up." },
+        id: null,
+      }),
+      { status: 503, headers: { "Content-Type": "application/json" } }
+    );
+  }
 
   const header = req.headers.get("authorization") ?? "";
   const match = header.match(/^Bearer\s+(.+)$/i);
