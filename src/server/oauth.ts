@@ -186,7 +186,7 @@ export async function handleOAuthRoute(req: Request): Promise<Response | null> {
     const contentType = req.headers.get("content-type") ?? "";
     let body: Record<string, unknown>;
     if (contentType.includes("application/json")) {
-      body = await req.json().catch(() => ({}));
+      body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     } else {
       // RFC 6749 form-encoded body — same dual handling as the Render version.
       const form = await req.formData().catch(() => new FormData());

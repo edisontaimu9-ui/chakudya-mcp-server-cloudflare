@@ -1,0 +1,65 @@
+name: CI
+
+# Checks every push to main and every pull request: typecheck, tests and a
+# dry-run bundle of the Worker. Nothing is deployed unless you opt in below.
+#
+# Optional: deploy from GitHub Actions after the checks pass.
+#   1. Cloudflare dashboard: My Profile -> API Tokens -> Create Token ->
+#      "Edit Cloudflare Workers" template. Copy the token.
+#   2. GitHub repo: Settings -> Secrets and variables -> Actions -> New
+#      repository secret named CLOUDFLARE_API_TOKEN.
+#   3. Same page, Variables tab: add DEPLOY_FROM_ACTIONS = true.
+#   4. If Cloudflare's own Git integration (Workers Builds) is connected to this
+#      repo, disconnect it (Workers & Pages -> your Worker -> Settings -> Build)
+#      so the two don't race to deploy the same push.
+# Until DEPLOY_FROM_ACTIONS is true, the deploy job is skipped.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # devDependencies are needed for tsc and vitest. --legacy-peer-deps matches
+      # how this project installs locally.
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --legacy-peer-deps
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Dry-run bundle
+        run: npx wrangler deploy --dry-run --outdir /tmp/worker-dry-run
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY_FROM_ACTIONS == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --legacy-peer-deps
+
+      - name: Deploy with Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          wranglerVersion: "4.151.1"

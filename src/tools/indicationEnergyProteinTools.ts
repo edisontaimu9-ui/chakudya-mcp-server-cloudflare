@@ -39,7 +39,7 @@ const INDICATION_DISCLAIMER =
 
 interface GuidelineRow {
   source: string;
-  energy: string;
+  energy?: string;
   protein?: string;
 }
 
