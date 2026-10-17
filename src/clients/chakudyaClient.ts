@@ -33,6 +33,29 @@ interface CnrEnvelope<T = unknown> {
   [key: string]: unknown;
 }
 
+const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
+const MAX_RETRY_WAIT_MS = 2_000;
+
+/** Base delay between attempts. Exposed only so tests can shorten it. */
+let retryBaseMs = 250;
+export function __setRetryBaseMsForTests(ms: number) {
+  retryBaseMs = ms;
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Exponential backoff with a little jitter, capped so a retry never stalls a tool call. */
+function backoffMs(attempt: number): number {
+  const base = retryBaseMs * 2 ** attempt;
+  return Math.min(MAX_RETRY_WAIT_MS, base + Math.floor(Math.random() * (retryBaseMs / 2 + 1)));
+}
+
+/** Honours a numeric Retry-After header on 429, capped at MAX_RETRY_WAIT_MS. */
+function retryAfterMs(res: Response): number | null {
+  const v = Number(res.headers.get("retry-after"));
+  return Number.isFinite(v) && v > 0 ? Math.min(MAX_RETRY_WAIT_MS, v * 1000) : null;
+}
+
 function buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>) {
   const baseUrl = getEnv().CHAKUDYA_API_BASE_URL.replace(/\/$/, "");
   const url = new URL(baseUrl + path);
@@ -54,6 +77,8 @@ async function request<T = unknown>(
     /** Set true only for routes documented as admin-gated in the CNR README. */
     useAdminKey?: boolean;
     timeoutMs?: number;
+    /** Extra attempts after the first, GET only. Default 1. */
+    retries?: number;
   } = {}
 ): Promise<CnrEnvelope<T>> {
   const { text } = await rawRequest(method, path, opts);
@@ -84,6 +109,8 @@ async function rawRequest(
     body?: unknown;
     useAdminKey?: boolean;
     timeoutMs?: number;
+    /** Extra attempts after the first, GET only. Default 1. */
+    retries?: number;
   } = {}
 ): Promise<{ res: Response; text: string; contentType: string }> {
   const { params, body, useAdminKey, timeoutMs = 15_000 } = opts;
@@ -116,62 +143,83 @@ async function rawRequest(
     }
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Only idempotent GETs are retried: a repeated POST/DELETE could write twice.
+  // One retry covers the usual blip (a cold Worker, a brief upstream 502/503/504,
+  // a 429) without stacking 15 s timeouts. A timeout is NOT retried, since the
+  // caller has already waited the full timeoutMs once.
+  const maxRetries = method === "GET" ? Math.max(0, opts.retries ?? 1) : 0;
 
-  let res: Response;
-  try {
-    // Prefer the service binding — a direct Worker-to-Worker call at the
-    // platform level. A plain fetch() to chakudya-api's public *.workers.dev
-    // URL reliably 404s when made FROM another Worker on the same Cloudflare
-    // account (a documented Cloudflare platform limitation, confirmed via
-    // curl-vs-Worker testing on 2026-09-02 — curl to the exact same URL
-    // returns 200). The binding sidesteps that entirely and is faster too,
-    // since it skips the public network hop. Falls back to plain fetch()
-    // if the binding is ever unset (e.g. local `wrangler dev` without
-    // --remote) so this client still works in that case.
-    const binding = getChakudyaApiBinding();
-    const fetchInit: RequestInit = {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
-    };
-    res = binding
-      ? await binding.fetch(url.toString(), fetchInit)
-      : await fetch(url.toString(), fetchInit);
-  } catch (e) {
-    clearTimeout(timer);
-    const isAbort = e instanceof Error && e.name === "AbortError";
-    throw new ChakudyaApiError(
-      isAbort
-        ? `Chakudya API request timed out after ${timeoutMs}ms`
-        : `Network error calling Chakudya API: ${(e as Error).message}`,
-      isAbort ? 504 : 502,
-      path,
-      null
-    );
-  } finally {
-    clearTimeout(timer);
-  }
+  for (let attempt = 0; ; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  const text = await res.text();
-  const contentType = res.headers.get("content-type") ?? "";
-
-  if (!res.ok) {
-    let parsed: unknown = null;
+    let res: Response;
     try {
-      parsed = text ? JSON.parse(text) : null;
-    } catch {
-      // error body wasn't JSON either (unlikely for this API); fall through
+      // Prefer the service binding — a direct Worker-to-Worker call at the
+      // platform level. A plain fetch() to chakudya-api's public *.workers.dev
+      // URL reliably 404s when made FROM another Worker on the same Cloudflare
+      // account (a documented Cloudflare platform limitation, confirmed via
+      // curl-vs-Worker testing on 2026-09-02 — curl to the exact same URL
+      // returns 200). The binding sidesteps that entirely and is faster too,
+      // since it skips the public network hop. Falls back to plain fetch()
+      // if the binding is ever unset (e.g. local `wrangler dev` without
+      // --remote) so this client still works in that case.
+      const binding = getChakudyaApiBinding();
+      const fetchInit: RequestInit = {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      };
+      res = binding
+        ? await binding.fetch(url.toString(), fetchInit)
+        : await fetch(url.toString(), fetchInit);
+    } catch (e) {
+      clearTimeout(timer);
+      const isAbort = e instanceof Error && e.name === "AbortError";
+      if (!isAbort && attempt < maxRetries) {
+        logger.warn("chakudya_api_retry", { path, attempt: attempt + 1, reason: "network_error" });
+        await sleep(backoffMs(attempt));
+        continue;
+      }
+      throw new ChakudyaApiError(
+        isAbort
+          ? `Chakudya API request timed out after ${timeoutMs}ms`
+          : `Network error calling Chakudya API: ${(e as Error).message}`,
+        isAbort ? 504 : 502,
+        path,
+        null
+      );
+    } finally {
+      clearTimeout(timer);
     }
-    const message =
-      (parsed as CnrEnvelope | null)?.message ?? `Chakudya API returned HTTP ${res.status} for ${method} ${path}`;
-    logger.warn("chakudya_api_error", { path, status: res.status, message });
-    throw new ChakudyaApiError(message, res.status, path, parsed ?? text);
-  }
 
-  return { res, text, contentType };
+    if (RETRYABLE_STATUS.has(res.status) && attempt < maxRetries) {
+      logger.warn("chakudya_api_retry", { path, attempt: attempt + 1, reason: `http_${res.status}` });
+      const wait = res.status === 429 ? retryAfterMs(res) ?? backoffMs(attempt) : backoffMs(attempt);
+      await res.body?.cancel().catch(() => {});
+      await sleep(wait);
+      continue;
+    }
+
+    const text = await res.text();
+    const contentType = res.headers.get("content-type") ?? "";
+
+    if (!res.ok) {
+      let parsed: unknown = null;
+      try {
+        parsed = text ? JSON.parse(text) : null;
+      } catch {
+        // error body wasn't JSON either (unlikely for this API); fall through
+      }
+      const message =
+        (parsed as CnrEnvelope | null)?.message ?? `Chakudya API returned HTTP ${res.status} for ${method} ${path}`;
+      logger.warn("chakudya_api_error", { path, status: res.status, message });
+      throw new ChakudyaApiError(message, res.status, path, parsed ?? text);
+    }
+
+    return { res, text, contentType };
+  }
 }
 
 
