@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { initEnv } from "../../config/env.js";
 import { createChakudyaMcpServer } from "../../server/createServer.js";
+import { __clearCacheForTests } from "../../clients/chakudyaClient.js";
 
 /**
  * Contract tests for the 8 food tools: each must call the right chakudya-api
@@ -41,6 +42,7 @@ async function call(name: string, args: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  __clearCacheForTests();
   calls = [];
   routes = {};
   initEnv({ ENVIRONMENT: "development", CHAKUDYA_API: fakeApi, CHAKUDYA_API_KEY: "cnr_consumer" });

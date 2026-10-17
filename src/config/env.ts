@@ -24,6 +24,8 @@ export interface WorkerBindings {
   MCP_ALLOW_QUERY_TOKEN?: string;
   /** Max characters of JSON a tool result may carry before lists are truncated. Default 30000. */
   MCP_MAX_RESULT_CHARS?: string;
+  /** Seconds to cache stable food lookups (by-id, label). 0 turns caching off. Default 3600. */
+  MCP_CACHE_TTL_SECONDS?: string;
   ENVIRONMENT?: string; // "production" | "development" — set via vars if you want dev logging
   /**
    * Service binding to the chakudya-api Worker (see the "services" entry in
@@ -54,6 +56,7 @@ const EnvSchema = z.object({
     .transform((v) => (v ?? "").split(",").map((s) => s.trim()).filter(Boolean)),
   MCP_RATE_LIMIT_PER_MIN: z.coerce.number().int().positive().default(60),
   MCP_MAX_RESULT_CHARS: z.coerce.number().int().min(2000).default(30000),
+  MCP_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).default(3600),
   MCP_ALLOW_QUERY_TOKEN: z
     .enum(["true", "false"])
     .default("false")

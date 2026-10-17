@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { initEnv } from "../../config/env.js";
-import { chakudyaClient, ChakudyaApiError, __setRetryBaseMsForTests } from "../chakudyaClient.js";
+import { chakudyaClient, ChakudyaApiError, __setRetryBaseMsForTests, __clearCacheForTests } from "../chakudyaClient.js";
 
 interface Seen { url: string; headers: Record<string, string>; method: string }
 
@@ -19,6 +19,8 @@ function setup(extra: Record<string, string> = {}, status = 200) {
   initEnv({ ENVIRONMENT: "development", CHAKUDYA_API: fakeBinding(seen, status), ...extra });
   return seen;
 }
+
+beforeEach(() => __clearCacheForTests());
 
 describe("chakudyaClient auth", () => {
   it("sends the consumer key on a normal call", async () => {

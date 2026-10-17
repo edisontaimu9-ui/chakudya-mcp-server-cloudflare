@@ -81,6 +81,16 @@ To trace a failed call, take the `X-Request-Id` from the client and search the
 logs for it. `/health` and the MCP handshake report the server version from
 `src/version.ts`, which must match `package.json` (a test checks this).
 
+## Lookup cache
+
+Stable lookups are cached in memory for faster repeat calls: the category list
+(24 hours) and single foods by id, including `?with_servings` and labels
+(`MCP_CACHE_TTL_SECONDS`, default 3600, set under `vars` in `wrangler.jsonc`;
+`0` turns caching off). Searches, packaged-food lookups, logs, memory, RAG, POSTs
+and admin calls are never cached, and neither are errors. The cache lives in each
+Worker isolate, so it is best effort: a cold isolate starts empty, and an update
+to a food in chakudya-api can take up to the TTL to show.
+
 ## Setup
 
 ```bash

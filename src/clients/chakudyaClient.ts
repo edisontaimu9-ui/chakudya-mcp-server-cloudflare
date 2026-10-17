@@ -1,5 +1,6 @@
 import { getEnv, getChakudyaApiBinding } from "../config/env.js";
 import { logger } from "../utils/logger.js";
+import { TtlCache } from "../utils/ttlCache.js";
 
 /**
  * Thin HTTP client for the already-deployed Chakudya Nutrition Registry
@@ -68,6 +69,44 @@ function buildUrl(path: string, params?: Record<string, string | number | boolea
   return url;
 }
 
+// ── Cache for stable reference lookups ─────────────────────────────────────────
+// Only GETs of data that rarely changes are cached: the category list and single
+// foods by id (and their labels). Searches, logs, memory, RAG and anything sent
+// with the admin key are never cached. Errors are never cached. The cache is
+// per isolate (see TtlCache), keyed by path plus sorted query string.
+const resultCache = new TtlCache<unknown>(300);
+const CATEGORIES_TTL_MS = 24 * 60 * 60 * 1000;
+const NON_ID_FOOD_ROUTES = new Set(["categories", "search", "lookup", "autocomplete", "convert", "compare"]);
+
+/** Returns the cache lifetime for a GET path, or 0 if it must not be cached. */
+export function cacheTtlMs(path: string): number {
+  let ttlSeconds: number;
+  try {
+    ttlSeconds = getEnv().MCP_CACHE_TTL_SECONDS;
+  } catch {
+    return 0;
+  }
+  if (ttlSeconds <= 0) return 0;
+  if (path === "/foods/categories") return CATEGORIES_TTL_MS;
+  const m = path.match(/^\/foods\/([^/]+)(\/label)?$/);
+  if (m && !NON_ID_FOOD_ROUTES.has(m[1])) return ttlSeconds * 1000;
+  return 0;
+}
+
+function cacheKey(path: string, params?: Record<string, string | number | boolean | undefined>): string {
+  const q = Object.entries(params ?? {})
+    .filter(([, v]) => v !== undefined)
+    .map(([k, v]) => `${k}=${String(v)}`)
+    .sort()
+    .join("&");
+  return q ? `${path}?${q}` : path;
+}
+
+/** Empties the lookup cache. Used by tests. */
+export function __clearCacheForTests(): void {
+  resultCache.clear();
+}
+
 async function request<T = unknown>(
   method: "GET" | "POST" | "DELETE",
   path: string,
@@ -81,6 +120,15 @@ async function request<T = unknown>(
     retries?: number;
   } = {}
 ): Promise<CnrEnvelope<T>> {
+  const ttl = method === "GET" && !opts.useAdminKey ? cacheTtlMs(path) : 0;
+  const key = ttl > 0 ? cacheKey(path, opts.params) : "";
+  if (ttl > 0) {
+    const hit = resultCache.get(key);
+    if (hit !== undefined) {
+      logger.debug("chakudya_cache_hit", { path });
+      return structuredClone(hit) as CnrEnvelope<T>; // a copy, so a caller can't alter the cached entry
+    }
+  }
   const { text } = await rawRequest(method, path, opts);
 
   let parsed: unknown = null;
@@ -92,6 +140,8 @@ async function request<T = unknown>(
     // must use chakudyaClient.getRaw() instead of get(), not this function.
   }
 
+  // rawRequest throws on any non-2xx, so only successful answers reach here.
+  if (ttl > 0 && parsed !== null) resultCache.set(key, structuredClone(parsed), ttl); // a copy: the caller keeps `parsed`
   return (parsed ?? {}) as CnrEnvelope<T>;
 }
 
