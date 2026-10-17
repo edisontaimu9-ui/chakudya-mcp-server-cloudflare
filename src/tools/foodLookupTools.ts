@@ -22,7 +22,7 @@ export function registerFoodLookupTools(server: McpServer) {
         "Look up ONE food by name (English or Chichewa, typos tolerated) and return its nutrient composition per 100 g from the Chakudya " +
         "Nutrition Registry: Malawi food composition table first, then cached/wider USDA, Open Food Facts and FatSecret data. Picks the best match " +
         "using the query's intent; if it was not confident it says so and lists alternates. Use this first when you need real nutrient values " +
-        "(e.g. 'mgaiwa', 'ufa woyera', 'kondowole') before comparing foods or using a calculator. tier='wider' skips local data.",
+        "(e.g. 'mgaiwa', 'ufa woyera', 'kondowole') before comparing foods or using a calculator. tier='wider' skips local data. For a list of candidates and ids use search_food; to filter by brand or ingredient use search_foods_advanced.",
       inputSchema: {
         query: z.string().min(1).optional().describe("Food name, e.g. 'mgaiwa' or 'rice cooked'"),
         barcode: z.string().min(8).max(14).optional(),
@@ -47,7 +47,7 @@ export function registerFoodLookupTools(server: McpServer) {
     "foods_by_category",
     {
       title: "Browse Foods by Category",
-      description: "List foods in one Chakudya food category (no search text needed), e.g. a cereal, legume or vegetable category. Use foods_categories if you need the category list.",
+      description: "List foods in one Chakudya food category (no search text needed), e.g. a cereal, legume or vegetable category. Use foods_categories if you need the category list. To narrow a category by name use search_foods_advanced.",
       inputSchema: {
         category: z.string().min(1),
         max_results: z.number().int().min(1).max(100).optional().default(20),
@@ -67,7 +67,7 @@ export function registerFoodLookupTools(server: McpServer) {
       description:
         "Typo-tolerant search over the local foods table with Chichewa/English synonym expansion (chinangwa also finds cassava), plus packaged-product " +
         "search by brand or by an ingredient. Give any of query, category, brand or ingredient. Rows are tagged _source and _match_type so you can " +
-        "tell what matched. Local data only; use find_food for the wider USDA/OFF/FatSecret tier.",
+        "tell what matched. Local data only; use find_food for the wider USDA/OFF/FatSecret tier. For a plain name search that returns ids use search_food.",
       inputSchema: {
         query: z.string().optional(),
         category: z.string().optional(),

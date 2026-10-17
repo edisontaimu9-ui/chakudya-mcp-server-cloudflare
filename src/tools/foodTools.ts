@@ -71,7 +71,8 @@ export function registerFoodTools(server: McpServer) {
     {
       title: "Search Food",
       description:
-        "Search the Chakudya Nutrition Registry (Malawi food composition database) by name. Three tiers, " +
+        "Find CANDIDATE foods by name; returns a list with ids. For ONE best-match food with per-100 g values use find_food; to filter by brand, ingredient or category use search_foods_advanced. " +
+        "Searches the Chakudya Nutrition Registry (Malawi food composition database). Three tiers, " +
         "same order as the Chakudya API's own internal lookup cascade: (1) exact/substring match in the " +
         "local database, (2) typo-tolerant fuzzy match against the local database (handles misspellings " +
         "like 'Chinagwa' for 'Chinangwa', or a plain English name against a Chichewa-labelled entry), " +
@@ -301,7 +302,7 @@ export function registerFoodTools(server: McpServer) {
         "Look up a packaged food product by barcode (EAN/UPC) and/or free-text product name. Checks the " +
         "community-submitted packaged foods table first, then falls back to the registry's wider data tier " +
         "(USDA FoodData Central / Open Food Facts / FatSecret) via the CNR foods/lookup route. At least " +
-        "one of barcode or query must be provided.",
+        "one of barcode or query must be provided. Use this when you have a barcode; to browse or filter packaged products by name use packaged_food_search.",
       inputSchema: {
         barcode: z.string().min(6).optional().describe("The product barcode, digits only"),
         query: z.string().optional().describe("Free-text product name to search for"),
@@ -344,7 +345,7 @@ export function registerFoodTools(server: McpServer) {
       description:
         "Search packaged/branded food products. Pass a barcode for an exact lookup, and/or a free-text " +
         "query to search by product name (substring match). At least one of barcode or query must be " +
-        "provided.",
+        "provided. Community packaged-foods table only, with no wider-tier fallback; for a barcode that may not be in it use barcode_lookup.",
       inputSchema: {
         query: z.string().optional().describe("Free-text product name search"),
         barcode: z.string().optional(),
@@ -376,7 +377,7 @@ export function registerFoodTools(server: McpServer) {
         "'chicken soup'). Checks the local CNR tables first, then the registry's FatSecret-backed tier " +
         "for anything with no local coverage — the FatSecret tier returns a 503-derived error on " +
         "deployments without FATSECRET_CONSUMER_KEY/SECRET configured on a Premier or Premier Free plan. " +
-        "Use search_food instead for the primary, always-available search.",
+        "Returns suggestion names only, with no nutrient values. Use search_food for the primary, always-available search.",
       inputSchema: {
         query: z.string().min(1).describe("Partial search expression, e.g. 'chic'"),
         max_results: z.number().int().positive().max(10).optional().default(4),
