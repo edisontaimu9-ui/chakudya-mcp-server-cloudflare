@@ -1,13 +1,17 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { chakudyaClient } from "../clients/chakudyaClient.js";
 import { ok, safeTool } from "../utils/toolResult.js";
+import { okWithApiMeta } from "../utils/apiMeta.js";
 
 /**
  * Energy expenditure calculators sourced from Nelms/Ireton-Jones, "Nutrition
  * Therapy and Pathophysiology" — Chapter 2: Intake: Energy. Institute of
  * Medicine (2002/2005) DRI/EER prediction equations (Box 2.1, Table 2.2-2.4).
  *
- * Pure calculation — no Chakudya API calls. Educational/clinical-support
+ * Pure calculation, except fever_stress_ree_adjustment, which calls
+ * chakudya-api (POST /stress-factors/fever; its percentages are stored in
+ * clinical_reference_values, condition 'stress_factors'). Educational/clinical-support
  * estimate only, not a substitute for individualized dietetic assessment or
  * measured indirect calorimetry.
  */
@@ -485,31 +489,11 @@ export function registerEnergyExpenditureTools(server: McpServer) {
         body_temp_f: z.number().optional(),
         body_temp_c: z.number().optional(),
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    safeTool("fever_stress_ree_adjustment", async ({ ree_kcal_per_day, body_temp_f, body_temp_c }) => {
-      if (body_temp_f === undefined && body_temp_c === undefined) {
-        return err("Provide body_temp_f or body_temp_c.");
-      }
-      let percentIncrease: number;
-      let basis: string;
-      if (body_temp_f !== undefined) {
-        const degreesAbove = Math.max(0, body_temp_f - 98.6);
-        percentIncrease = degreesAbove * 7;
-        basis = `${degreesAbove.toFixed(1)}°F above 98.6°F x 7%/°F`;
-      } else {
-        const degreesAbove = Math.max(0, (body_temp_c as number) - 37);
-        percentIncrease = degreesAbove * 13;
-        basis = `${degreesAbove.toFixed(1)}°C above 37°C x 13%/°C`;
-      }
-      const adjustedRee = ree_kcal_per_day * (1 + percentIncrease / 100);
-      return ok({
-        ree_kcal_per_day,
-        percent_increase: Math.round(percentIncrease * 10) / 10,
-        basis,
-        adjusted_ree_kcal_per_day: Math.round(adjustedRee),
-        disclaimer: DISCLAIMER,
-      });
+    safeTool("fever_stress_ree_adjustment", async (input) => {
+      const res = await chakudyaClient.post("/stress-factors/fever", input);
+      return okWithApiMeta(res);
     })
   );
 
