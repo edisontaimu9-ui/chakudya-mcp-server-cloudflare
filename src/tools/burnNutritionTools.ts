@@ -1,41 +1,32 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ok, safeTool } from "../utils/toolResult.js";
+import { chakudyaClient } from "../clients/chakudyaClient.js";
+import { safeTool } from "../utils/toolResult.js";
+import { okWithApiMeta } from "../utils/apiMeta.js";
 
 /**
- * Medical Nutrition Therapy in Burns.
+ * Medical Nutrition Therapy in Burns, on chakudya-api (/burns/*).
  *
- * Source: Abillama F. Medical Nutrition Therapy in Burns: Optimizing
- * Healing and Recovery. LAUMCRH Beirut Lebanon — teaching slide deck citing
- * ESPEN endorsed recommendations (Rousseau et al, Clin Nutr 2013;32:497-502),
- * Williams et al (Surg Clin North Am 2011), Wise/Miller/Hromatka (Nutr Clin
- * Pract 2019), Pantet et al (Clin Nutr 2019;38:246-251), and the deck's own
- * Toronto/Schofield/Parkland formula citations (see each tool's notes).
+ * Source: Abillama F. Medical Nutrition Therapy in Burns: Optimizing Healing and Recovery. LAUMCRH
+ * Beirut Lebanon (teaching deck citing ESPEN endorsed recommendations, Rousseau et al, Clin Nutr
+ * 2013;32:497-502, and others noted in each result's citation).
  *
- * Five tools:
- * - burn_fluid_resuscitation_parkland — Parkland/Baxter formula (>10% TBSA)
- * - burn_energy_requirements          — Toronto (adults) / Schofield
- *                                        (pediatric 3-18y) predictive REE
- * - burn_protein_requirements         — g/kg/day + NPC:N ratio by burn size
- * - burn_nitrogen_balance             — nitrogen balance + Gottschlich (1993)
- *                                        burned-tissue N-loss estimate
- * - burn_micronutrient_dosing         — vitamin/trace-element dosing guidance
- *                                        by burn size, per ESPEN + case-study
- *                                        sources cited in the deck
+ * The formulas live in the API (src/burnNutrition.js) and every coefficient, band, dose and
+ * reference text is read there from the clinical_reference_values table, so the API is the single
+ * source of truth and values can be corrected in Supabase without redeploying this server. These
+ * tools only pass the inputs through.
  *
- * IMPORTANT — per the deck itself: "NO predictive equation is accurate."
- * Indirect calorimetry (in the fed state, at several points during
- * hospitalization) is the gold standard; these formulas are fallbacks when
- * it isn't available. All tools here are calculators/classifiers only, not
- * a substitute for individualized clinical judgment.
+ * Tools:
+ *   - burn_fluid_resuscitation_parkland   POST /burns/fluid-resuscitation
+ *   - burn_energy_requirements            POST /burns/energy
+ *   - burn_protein_requirements           POST /burns/protein
+ *   - burn_nitrogen_balance               POST /burns/nitrogen-balance
+ *   - burn_micronutrient_dosing           POST /burns/micronutrients
+ *   - burn_glucose_glycemic_targets       POST /burns/glycemic-targets
+ *
+ * Per the deck itself: "NO predictive equation is accurate." Indirect calorimetry is the gold
+ * standard; these are fallbacks. Calculators/classifiers only, not a substitute for clinical judgment.
  */
-
-const BURN_DISCLAIMER =
-  "Educational/clinical-support calculation only, per Abillama F. Medical Nutrition Therapy in Burns " +
-  "(LAUMCRH Beirut Lebanon), citing ESPEN endorsed recommendations (Rousseau et al, Clin Nutr " +
-  "2013;32:497-502) and sources noted per tool. Indirect calorimetry is the gold standard for energy " +
-  "needs when available — no predictive equation is fully accurate. Not a substitute for individualized " +
-  "clinical assessment.";
 
 export function registerBurnNutritionTools(server: McpServer): void {
   // ── Fluid resuscitation (Parkland/Baxter formula) ────────────────────────
@@ -61,55 +52,11 @@ export function registerBurnNutritionTools(server: McpServer): void {
           .optional()
           .describe("Hours elapsed since the burn injury (not since hospital arrival), if known"),
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    safeTool("burn_fluid_resuscitation_parkland", async ({ weight_kg, tbsa_burned_percent, hours_since_burn }) => {
-      const totalMl = 4 * weight_kg * tbsa_burned_percent;
-      const first8hMl = totalMl / 2;
-      const next16hMl = totalMl / 2;
-      const first8hRateMlPerHr = first8hMl / 8;
-      const next16hRateMlPerHr = next16hMl / 16;
-
-      const notes: string[] = [];
-      if (tbsa_burned_percent <= 10) {
-        notes.push(
-          "TBSA is <=10% — the Parkland formula is indicated for burns >10% TBSA; smaller burns " +
-            "typically don't need formal formula-driven resuscitation. Result shown for reference only."
-        );
-      }
-
-      let remaining: Record<string, number> | undefined;
-      if (hours_since_burn !== undefined) {
-        if (hours_since_burn < 8) {
-          const elapsedFirst8h = hours_since_burn;
-          remaining = {
-            remaining_ml_in_first_8h_window: Math.max(0, first8hMl - elapsedFirst8h * first8hRateMlPerHr),
-            hours_remaining_in_first_8h_window: 8 - elapsedFirst8h,
-          };
-        } else if (hours_since_burn < 24) {
-          const elapsedInNext16h = hours_since_burn - 8;
-          remaining = {
-            remaining_ml_in_next_16h_window: Math.max(0, next16hMl - elapsedInNext16h * next16hRateMlPerHr),
-            hours_remaining_in_24h_period: 24 - hours_since_burn,
-          };
-        } else {
-          notes.push("hours_since_burn is >=24 — the initial 24h Parkland window has elapsed.");
-        }
-      }
-
-      return ok(
-        {
-          total_24h_ml: Math.round(totalMl),
-          first_8h_ml: Math.round(first8hMl),
-          first_8h_rate_ml_per_hr: Math.round(first8hRateMlPerHr),
-          next_16h_ml: Math.round(next16hMl),
-          next_16h_rate_ml_per_hr: Math.round(next16hRateMlPerHr),
-          ...(remaining ? { remaining } : {}),
-          formula: "4 mL x weight(kg) x %TBSA burned; half in first 8h post-burn, half over next 16h",
-          notes,
-        },
-        { disclaimer: BURN_DISCLAIMER, citation: "Baxter CR, 1974 (Parkland formula)" }
-      );
+    safeTool("burn_fluid_resuscitation_parkland", async (input) => {
+      const res = await chakudyaClient.post("/burns/fluid-resuscitation", input);
+      return okWithApiMeta(res);
     })
   );
 
@@ -141,131 +88,12 @@ export function registerBurnNutritionTools(server: McpServer): void {
           .optional()
           .describe("Required for adults (Toronto): days since burn injury, injury day = 0"),
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    safeTool(
-      "burn_energy_requirements",
-      async ({ weight_kg, height_cm, age_years, sex, tbsa_burned_percent, kcal_intake_past_24h, body_temp_c, days_post_burn }) => {
-        const isPediatric = age_years < 18;
-
-        if (isPediatric) {
-          // Weight-only Schofield (Mrazek et al 2024) — supersedes the older
-          // weight+height variant (Rousseau et al 2013) as the more recent
-          // published source, and additionally covers ages <3y, which the
-          // weight+height version's source table didn't include at all.
-          let kcalPerDay: number;
-          let band: string;
-          let formula: string;
-          if (sex === "female") {
-            if (age_years < 3) {
-              band = "female <3y";
-              kcalPerDay = 58.31 * weight_kg - 31.1;
-              formula = "Schofield (weight-only, female <3y): (58.31 x weight_kg) - 31.1";
-            } else if (age_years <= 10) {
-              band = "female 3-10y";
-              kcalPerDay = 20.315 * weight_kg + 485.9;
-              formula = "Schofield (weight-only, female 3-10y): (20.315 x weight_kg) + 485.9";
-            } else {
-              band = "female 10-19y";
-              kcalPerDay = 13.384 * weight_kg + 692.6;
-              formula = "Schofield (weight-only, female 10-19y): (13.384 x weight_kg) + 692.6";
-            }
-          } else {
-            if (age_years < 3) {
-              band = "male <3y";
-              kcalPerDay = 59.51 * weight_kg - 30.4;
-              formula = "Schofield (weight-only, male <3y): (59.51 x weight_kg) - 30.4";
-            } else if (age_years <= 10) {
-              band = "male 3-10y";
-              kcalPerDay = 22.706 * weight_kg + 504.3;
-              formula = "Schofield (weight-only, male 3-10y): (22.706 x weight_kg) + 504.3";
-            } else {
-              band = "male 10-18y";
-              kcalPerDay = 17.686 * weight_kg + 658.2;
-              formula = "Schofield (weight-only, male 10-18y): (17.686 x weight_kg) + 658.2";
-            }
-          }
-          return ok(
-            {
-              population: "pediatric",
-              age_band: band,
-              estimated_kcal_per_day: Math.round(kcalPerDay),
-              formula,
-              note:
-                "height_cm is not used for this pediatric calculation (weight-only equation). For the " +
-                "older weight+height Schofield variant (Rousseau et al 2013, ages 3-18y only), or to " +
-                "compare this against Curreri Junior/Galveston/Mayes/WHO side by side, use " +
-                "burn_pediatric_predictive_equations_comparison.",
-            },
-            { disclaimer: BURN_DISCLAIMER, citation: "Mrazek et al, Semin Plast Surg 2024;38:125-132, Table 1 (weight-only Schofield)" }
-          );
-        }
-
-        // Adult — Toronto equation
-        const missing: string[] = [];
-        if (tbsa_burned_percent === undefined) missing.push("tbsa_burned_percent");
-        if (kcal_intake_past_24h === undefined) missing.push("kcal_intake_past_24h");
-        if (body_temp_c === undefined) missing.push("body_temp_c");
-        if (days_post_burn === undefined) missing.push("days_post_burn");
-        if (missing.length > 0) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Adult (Toronto equation) requires: ${missing.join(", ")}.`,
-              },
-            ],
-            isError: true as const,
-          };
-        }
-
-        const harrisBenedictBasal =
-          sex === "male"
-            ? 66.47 + 13.75 * weight_kg + 5.003 * height_cm - 6.755 * age_years
-            : 655.1 + 9.563 * weight_kg + 1.85 * height_cm - 4.676 * age_years;
-
-        const reeKcal =
-          -4343 +
-          10.5 * tbsa_burned_percent! +
-          0.23 * kcal_intake_past_24h! +
-          0.84 * harrisBenedictBasal +
-          114 * body_temp_c! -
-          4.5 * days_post_burn!;
-
-        // Reference-only comparisons — the source paper explicitly warns
-        // both directions are inaccurate for burn patients, shown here only
-        // so the Toronto result can be sanity-checked against them, never
-        // as an alternative recommendation.
-        const rapidFormulaRangeKcal = { low: 25 * weight_kg, high: 30 * weight_kg };
-        const curreriKcal = 25 * weight_kg + 40 * tbsa_burned_percent!;
-
-        return ok(
-          {
-            population: "adult",
-            harris_benedict_basal_kcal: Math.round(harrisBenedictBasal),
-            toronto_ree_kcal: Math.round(reeKcal),
-            formula:
-              "REE = -4343 + (10.5 x %TBSA burned) + (0.23 x kcal intake past 24h) + (0.84 x Harris-Benedict) + (114 x T degC) - (4.5 x days post-burn)",
-            reference_only_rapid_formula_kcal_range: {
-              ...rapidFormulaRangeKcal,
-              note: "25-30 kcal/kg/day (fixed weight-based ICU formula) — per Rousseau et al 2013, this UNDERFEEDS burn patients (Rimdeika et al, 2006). Shown for comparison only.",
-            },
-            reference_only_curreri_kcal: {
-              value: Math.round(curreriKcal),
-              formula: "25 x weight_kg + 40 x %TBSA burned (Curreri, historical)",
-              note:
-                "Historical formula from the 1970s-80s 'hyperalimentation' era. Rousseau et al 2013 " +
-                "explicitly identifies this as a cause of routine massive OVERFEEDING in burn patients " +
-                "(deliveries around 5000 kcal/day were treated as normal under this equation), which " +
-                "caused morbidity including fatty liver infiltration and increased infectious morbidity. " +
-                "Shown for historical comparison only — not a recommended target.",
-            },
-            note: "Per source: no predictive equation is fully accurate; indirect calorimetry (fed state, repeated through hospitalization, results rounded up without exceeding +10% of measured value) is the gold standard where available.",
-          },
-          { disclaimer: BURN_DISCLAIMER, citation: "Toronto equation; Harris-Benedict basal (no stress/activity factor); Curreri, historical — all per Rousseau et al, Clin Nutr 2013;32:497-502" }
-        );
-      }
-    )
+    safeTool("burn_energy_requirements", async (input) => {
+      const res = await chakudyaClient.post("/burns/energy", input);
+      return okWithApiMeta(res);
+    })
   );
 
   // ── Protein requirements ─────────────────────────────────────────────────
@@ -285,56 +113,11 @@ export function registerBurnNutritionTools(server: McpServer): void {
         weight_kg: z.number().positive().optional().describe("If given, also returns total grams/day"),
         is_pediatric: z.boolean().optional().describe("If true, uses the pediatric 1.5-3 g/kg/day range"),
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    safeTool("burn_protein_requirements", async ({ tbsa_burned_percent, weight_kg, is_pediatric }) => {
-      if (is_pediatric) {
-        const range = { low: 1.5, high: 3.0 };
-        return ok(
-          {
-            protein_g_per_kg_per_day_range: range,
-            total_grams_per_day_range: weight_kg
-              ? { low: Math.round(range.low * weight_kg), high: Math.round(range.high * weight_kg) }
-              : undefined,
-            note:
-              "Per ESPEN endorsed recommendations (Table 1), higher than other critically ill patient " +
-              "categories. Intakes up to 3 g/kg/day have been reported without demonstrated added " +
-              "advantage over the lower end of this range (O'Neil et al, 1989) — the top of the range " +
-              "isn't automatically the target.",
-          },
-          { disclaimer: BURN_DISCLAIMER, citation: "Rousseau et al, Clin Nutr 2013;32:497-502 (ESPEN endorsed recommendations), Table 1" }
-        );
-      }
-
-      let range: { low: number; high: number };
-      let npcNRatio: string;
-      if (tbsa_burned_percent < 15) {
-        range = { low: 1.0, high: 1.5 };
-        npcNRatio = "150:1";
-      } else if (tbsa_burned_percent <= 30) {
-        range = { low: 1.5, high: 1.5 };
-        npcNRatio = "120:1";
-      } else if (tbsa_burned_percent <= 49) {
-        range = { low: 1.5, high: 2.0 };
-        npcNRatio = "100:1";
-      } else {
-        range = { low: 2.0, high: 2.3 };
-        npcNRatio = "100:1";
-      }
-
-      return ok(
-        {
-          burn_size_band_percent: tbsa_burned_percent < 15 ? "<15" : tbsa_burned_percent <= 30 ? "15-30" : tbsa_burned_percent <= 49 ? "31-49" : "50+",
-          protein_g_per_kg_per_day_range: range,
-          total_grams_per_day_range: weight_kg
-            ? { low: Math.round(range.low * weight_kg), high: Math.round(range.high * weight_kg) }
-            : undefined,
-          non_protein_calorie_to_nitrogen_ratio: npcNRatio,
-          general_adult_range_g_per_kg_per_day: { low: 1.5, high: 2.0 },
-          adequacy_can_be_evaluated_by: ["Wound healing of burn and donor sites", "Adherence of skin grafts", "Nitrogen balance"],
-        },
-        { disclaimer: BURN_DISCLAIMER, citation: "Rousseau et al, Clin Nutr 2013;32:497-502 (ESPEN endorsed recommendations)" }
-      );
+    safeTool("burn_protein_requirements", async (input) => {
+      const res = await chakudyaClient.post("/burns/protein", input);
+      return okWithApiMeta(res);
     })
   );
 
@@ -354,44 +137,11 @@ export function registerBurnNutritionTools(server: McpServer): void {
         open_wound_percent: z.number().min(0).max(100).optional(),
         weight_kg: z.number().positive().optional().describe("Required for the burned-tissue N-loss estimate"),
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    safeTool("burn_nitrogen_balance", async ({ protein_intake_g, uun_g, open_wound_percent, weight_kg }) => {
-      const nitrogenBalance = protein_intake_g / 6.25 - uun_g / 0.8 + 4;
-
-      let burnedTissueNLossGPerKgPerDay: number | undefined;
-      let burnedTissueBand: string | undefined;
-      if (open_wound_percent !== undefined) {
-        if (open_wound_percent < 10) {
-          burnedTissueNLossGPerKgPerDay = 0.02;
-          burnedTissueBand = "<10% open wound";
-        } else if (open_wound_percent <= 30) {
-          burnedTissueNLossGPerKgPerDay = 0.05;
-          burnedTissueBand = "11-30% open wound";
-        } else {
-          burnedTissueNLossGPerKgPerDay = 0.12;
-          burnedTissueBand = ">31% open wound";
-        }
-      }
-
-      return ok(
-        {
-          nitrogen_balance_g_per_day: Math.round(nitrogenBalance * 100) / 100,
-          interpretation: nitrogenBalance > 0 ? "positive (anabolic)" : nitrogenBalance < 0 ? "negative (catabolic)" : "neutral",
-          formula: "Nitrogen Balance = (protein_intake_g / 6.25) - (UUN_g / 0.8) + 4",
-          ...(burnedTissueNLossGPerKgPerDay !== undefined
-            ? {
-                estimated_burned_tissue_nitrogen_loss: {
-                  band: burnedTissueBand,
-                  g_nitrogen_per_kg_per_day: burnedTissueNLossGPerKgPerDay,
-                  total_g_per_day: weight_kg ? Math.round(burnedTissueNLossGPerKgPerDay * weight_kg * 100) / 100 : undefined,
-                  note: "Nitrogen losses through burned tissue are difficult to quantify precisely; this is an estimate (Gottschlich, 1993). Losses should begin to decrease as wounds heal or engraft.",
-                },
-              }
-            : {}),
-        },
-        { disclaimer: BURN_DISCLAIMER, citation: "Gottschlich, 1993 (burned-tissue nitrogen loss estimate)" }
-      );
+    safeTool("burn_nitrogen_balance", async (input) => {
+      const res = await chakudyaClient.post("/burns/nitrogen-balance", input);
+      return okWithApiMeta(res);
     })
   );
 
@@ -412,61 +162,12 @@ export function registerBurnNutritionTools(server: McpServer): void {
         chronically_malnourished: z.boolean().optional().describe("Used for the Vitamin A dose-halving criterion"),
         open_wound_percent: z.number().min(0).max(100).optional().describe("Used to flag Vitamin A discontinuation threshold"),
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    safeTool(
-      "burn_micronutrient_dosing",
-      async ({ tbsa_burned_percent, bmi, age_years, chronically_malnourished, open_wound_percent }) => {
-        const vitaminAHalfDoseCriteriaMet =
-          (bmi !== undefined && bmi < 18) || (age_years !== undefined && age_years < 18) || chronically_malnourished === true;
-
-        let traceElementDuration: string;
-        if (tbsa_burned_percent < 20) {
-          traceElementDuration = "Not specifically covered by the cited duration table (starts at 20% TBSA)";
-        } else if (tbsa_burned_percent <= 40) {
-          traceElementDuration = "7-8 days";
-        } else if (tbsa_burned_percent <= 60) {
-          traceElementDuration = "2 weeks";
-        } else {
-          traceElementDuration = "30 days";
-        }
-
-        return ok(
-          {
-            multivitamin: "Once per day (Vitamin A, B, C, E, D + Thiamin — thiamin normalizes lactate & pyruvate metabolism)",
-            vitamin_a: {
-              standard_dose: "10,000 IU once per day",
-              half_dose_and_discontinue_recommended: vitaminAHalfDoseCriteriaMet,
-              half_dose_criteria: "BMI <18, OR age <18, OR chronically malnourished",
-              discontinue_when: "wounds <10% open",
-              caution: "Watch for hypercalcemia secondary to Vitamin A overdose, especially with asymptomatic hypercalcemia + normal PTH + normal Vitamin D.",
-            },
-            vitamin_c: {
-              standard_recommendation: "0.5-1 g/day (needs remain elevated in the acute phase); doses 1.5-3x RDA reduce oxidative stress and improve wound healing",
-              note_separate_high_dose_iv_protocol:
-                "A distinct high-dose IV protocol (66 mg/kg/hr continuous infusion, up to 10g within first 2 days) is reported in some studies to reduce fluid requirements and in-hospital mortality, but carries AKI/renal failure risk — this is a specific studied protocol, not the standard ESPEN daily recommendation.",
-            },
-            vitamin_d: {
-              note: "Deficiency present in >90% of burn patients (often profound); 400 IU/day standard intake is insufficient and does not improve bone density. Low-cost, low-risk — may reduce length of stay. Long-term supplementation may be needed for bone homeostasis.",
-            },
-            vitamin_e: {
-              note: "No single ESPEN numeric dose given in this source; doses 1.5-3x RDA (combined with Vitamin C) associated with reduced oxidative stress and improved wound healing. Direct wound application also reported to improve outcomes.",
-            },
-            trace_elements_iv_repletion: {
-              duration_by_burn_size: traceElementDuration,
-              duration_table: { "20-40% TBSA": "7-8 days", "40-60% TBSA": "2 weeks", ">60% TBSA": "30 days" },
-              max_daily_iv_intake_vs_rda: {
-                copper: { max_iv_mg: 4.77, rda_mcg: 900 },
-                selenium: { max_iv_mcg: 273, rda_mcg: 55 },
-                zinc: { max_iv_mg: 45.5, rda_mg: 11 },
-              },
-              note: "Copper, selenium, and zinc are lost in large amounts via exudative losses. Competition between copper and zinc for intestinal absorption means enteral substitution at these doses is inefficient — IV route may be needed.",
-            },
-          },
-          { disclaimer: BURN_DISCLAIMER, citation: "Rousseau et al 2013 (ESPEN); Pantet et al, Clin Nutr 2019;38:246-251; Zeitouni et al 2022 (Vitamin A); Siddiqi et al 2022 / Nakajima et al 2019 (Vitamin C)" }
-        );
-      }
-    )
+    safeTool("burn_micronutrient_dosing", async (input) => {
+      const res = await chakudyaClient.post("/burns/micronutrients", input);
+      return okWithApiMeta(res);
+    })
   );
 
   // ── Carbohydrate delivery and glycemic targets ───────────────────────────
@@ -488,42 +189,11 @@ export function registerBurnNutritionTools(server: McpServer): void {
           .optional()
           .describe("If given, computes the carbohydrate kcal/day range at 55-60% of total energy"),
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    safeTool("burn_glucose_glycemic_targets", async ({ weight_kg, total_energy_kcal_per_day }) => {
-      const maxCarbGPerDay = weight_kg !== undefined ? 5 * weight_kg * 1.44 : undefined; // 5 mg/kg/min x 1440 min/day / 1000
-
-      let carbKcalRange: { low: number; high: number } | undefined;
-      if (total_energy_kcal_per_day !== undefined) {
-        carbKcalRange = {
-          low: Math.round(total_energy_kcal_per_day * 0.55),
-          high: Math.round(total_energy_kcal_per_day * 0.6),
-        };
-      }
-
-      return ok(
-        {
-          carbohydrate_delivery: {
-            percent_of_total_energy: { low: 55, high: 60 },
-            max_rate_mg_per_kg_per_min: 5,
-            max_g_per_day: maxCarbGPerDay !== undefined ? Math.round(maxCarbGPerDay) : undefined,
-            standard_adult_reference_g_per_day: 7,
-            kcal_per_day_range: carbKcalRange,
-            note: "Prescribed carbohydrate for both nutritional and drug-dilution purposes counts toward this ceiling — include non-nutritional dextrose sources (e.g. IV dextrose 5% used to treat hypernatremia) in the total.",
-          },
-          blood_glucose_target: {
-            mmol_per_l: { low: 5, high: 8 },
-            mg_per_dl_equivalent: { low: 90, high: 144 },
-            method: "Continuous intravenous insulin infusion",
-            note:
-              "Moderate glycemic control, not intensive insulin therapy — intensive control carries " +
-              "elevated hypoglycemia risk in burn patients due to frequent feeding interruptions for " +
-              "procedures under anesthesia. If moderate control isn't achievable, the general ICU " +
-              "fallback range of 6-8 mmol/l (100-150 mg/dl) applies.",
-          },
-        },
-        { disclaimer: BURN_DISCLAIMER, citation: "Rousseau et al, Clin Nutr 2013;32:497-502 (ESPEN endorsed recommendations), Table 1 — strong recommendation" }
-      );
+    safeTool("burn_glucose_glycemic_targets", async (input) => {
+      const res = await chakudyaClient.post("/burns/glycemic-targets", input);
+      return okWithApiMeta(res);
     })
   );
 }
