@@ -40,7 +40,7 @@ confusion for the model), add `?toolset=` to the MCP URL with one or more names,
 comma separated:
 
 ```
-https://<your-worker>.workers.dev/mcp?toolset=food,screening
+https://mcp.chakudya.xyz/mcp?toolset=food,screening
 ```
 
 | Toolset | What it covers |
@@ -226,10 +226,11 @@ MCP session id; `memory_consolidate` needs `CHAKUDYA_ADMIN_API_KEY`.
 ## Connecting an MCP client
 
 Same as the Render deployment: point the client at
-`https://<your-worker-subdomain>.workers.dev/mcp` with
+`https://mcp.chakudya.xyz/mcp` with
 `Authorization: Bearer <MCP_AUTH_TOKEN>`, or use the OAuth flow
 (`/.well-known/oauth-authorization-server`) for clients like Claude.ai's
-custom connector UI that don't support raw bearer tokens.
+custom connector UI that don't support raw bearer tokens. The Worker's
+`<your-worker-subdomain>.workers.dev/mcp` address keeps working too.
 
 ## Health check
 
